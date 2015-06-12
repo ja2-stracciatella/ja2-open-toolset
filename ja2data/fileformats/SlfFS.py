@@ -19,6 +19,7 @@
 
 import os
 import struct
+import re
 from time import ctime
 from fs.base import FS
 from fs.errors import CreateFailedError, UnsupportedError, ResourceNotFoundError, ResourceInvalidError
@@ -55,7 +56,7 @@ class SlfEntry:
 
         data = file.read(entry_size)
         data = dict(zip(SlfEntry.field_names, struct.unpack(SlfEntry.format_in_file, data)))
-        data["file_name"] = '/' + decode_slf_string(data["file_name"]).replace('\\', '/')
+        data["file_name"] = '/' + re.sub(r'[\\]+', '/', decode_slf_string(data["file_name"]))
         data["time"] = ctime(data["time"] / 10000000 - 11644473600)
         for key in data:
             setattr(self, key, data[key])

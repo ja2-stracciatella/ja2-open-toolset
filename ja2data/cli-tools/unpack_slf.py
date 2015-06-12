@@ -73,13 +73,17 @@ def main():
     slf_fs = SlfFS(slf_file)
     out_fs = OSFS(output_folder)
 
+    if args.verbose:
+        print("Extracting Files:")
+        slf_fs.printtree()
+
     combined_fs = MountFS()
     combined_fs.mountdir('slf', slf_fs)
     combined_fs.mountdir('out', out_fs)
     combined_fs.copydir('/slf', '/out', overwrite=True)
 
     if args.verbose:
-        print("done")
+        print("Done")
 
 
 if __name__ == "__main__":

@@ -26,12 +26,10 @@ from fs.errors import CreateFailedError, UnsupportedError, ResourceNotFoundError
 from fs.filelike import FileLikeBase
 from fs.memoryfs import MemoryFS
 
+from .common import decode_ja2_string
+
 
 WRITING_NOT_SUPPORTED_ERROR = 'Writing to an SLF is not yet supported. Operation. {}'
-
-
-def decode_slf_string(string):
-    return string.decode("ascii").replace("\x00", "")
 
 
 class SlfEntry:
@@ -49,14 +47,9 @@ class SlfEntry:
         'reserved2'
     ]
 
-    def __init__(self, i, file):
-        entry_size = struct.calcsize(SlfEntry.format_in_file)
-
-        file.seek(-entry_size * i, os.SEEK_END)
-
-        data = file.read(entry_size)
+    def __init__(self, data):
         data = dict(zip(SlfEntry.field_names, struct.unpack(SlfEntry.format_in_file, data)))
-        data["file_name"] = '/' + re.sub(r'[\\]+', '/', decode_slf_string(data["file_name"]))
+        data["file_name"] = '/' + re.sub(r'[\\]+', '/', decode_ja2_string(data["file_name"]))
         data["time"] = ctime(data["time"] / 10000000 - 11644473600)
         for key in data:
             setattr(self, key, data[key])
@@ -80,21 +73,12 @@ class SlfHeader:
         'reserved'
     ]
 
-    def __init__(self, file):
-        header_size = struct.calcsize(SlfHeader.format_in_file)
-
-        data = file.read(header_size)
-
+    def __init__(self, data):
         data = dict(zip(SlfHeader.field_names, struct.unpack(SlfHeader.format_in_file, data)))
-        data['library_name'] = decode_slf_string(data["library_name"])
-        data['library_path'] = decode_slf_string(data["library_path"])
+        data['library_name'] = decode_ja2_string(data["library_name"])
+        data['library_path'] = decode_ja2_string(data["library_path"])
         for key in data:
             setattr(self, key, data[key])
-
-        self.entries = []
-        for i in range(self.number_of_entries):
-            self.entries.append(SlfEntry(self.number_of_entries - i, file))
-
 
 class PartialFile(FileLikeBase):
     """
@@ -148,6 +132,8 @@ class SlfFS(FS):
     }
 
     def __init__(self, slf_filename):
+        header_size = struct.calcsize(SlfHeader.format_in_file)
+
         super(SlfFS, self).__init__()
 
         if isinstance(slf_filename, str):
@@ -165,10 +151,12 @@ class SlfFS(FS):
             self.file_name = 'file-like'
             self.file = slf_filename
 
-        self.header = SlfHeader(self.file)
+        header_data = self.file.read(header_size)
+        self.header = SlfHeader(header_data)
+        self.entries = list(map(self._read_entry, range(self.header.number_of_entries)))
 
         self._path_fs = MemoryFS()
-        for e in self.header.entries:
+        for e in self.entries:
             path = e.file_name.split('/')
             directory = '/'.join(path[:-1]) + '/'
 
@@ -179,6 +167,12 @@ class SlfFS(FS):
                 self._path_fs.createfile(directory[:-1] + '_DIRECTORY_CONFLICT')
             self._path_fs.makedir(directory, recursive=True, allow_recreate=True)
             self._path_fs.createfile(e.file_name)
+
+    def _read_entry(self, index):
+        entry_size = struct.calcsize(SlfEntry.format_in_file)
+        self.file.seek(-entry_size * (self.header.number_of_entries - index), os.SEEK_END)
+        data = self.file.read(entry_size)
+        return SlfEntry(data)
 
     def __str__(self):
         return '<SlfFS: {0}>'.format(self.file_name)
@@ -228,4 +222,4 @@ class SlfFS(FS):
         raise UnsupportedError(WRITING_NOT_SUPPORTED_ERROR.format('rename'))
 
     def _get_slf_entry_for_path(self, path):
-        return next(e for e in self.header.entries if e.file_name == path)
+        return next(e for e in self.entries if e.file_name == path)

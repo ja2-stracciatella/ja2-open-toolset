@@ -82,7 +82,19 @@ def main():
         if sti.header.mode != 'indexed':
             sti.images[0][0].save(output_file)
         else:
-            sti.images[0][0].save(output_file, transparency=0)
+            if sti.header.animated:
+                base_dir = os.path.splitext(output_file)[0]
+                if not os.path.exists(base_dir):
+                    os.mkdir(base_dir)
+                for animation_index, animation in enumerate(sti.images):
+                    animation_target_dir = os.path.join(base_dir, str(animation_index))
+                    if not os.path.exists(animation_target_dir):
+                        os.mkdir(animation_target_dir)
+                    for image_index, image in enumerate(animation):
+                        image_file = os.path.join(animation_target_dir, '{}.png'.format(image_index))
+                        image.save(image_file, transparency=0)
+            else:
+                sti.images[0][0].save(output_file, transparency=0)
 
         print("Done")
 

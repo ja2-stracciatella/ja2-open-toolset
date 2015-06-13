@@ -18,9 +18,10 @@
 ##############################################################################
 
 import os
-import struct
-from PIL import Image, ImagePalette
 import io
+import struct
+from operator import attrgetter
+from PIL import Image, ImagePalette
 
 from .common import decode_ja2_string
 from .ETRLE import ERTLE
@@ -136,6 +137,24 @@ class StiSubImageHeader:
         for key in data:
             setattr(self, key, data[key])
 
+class AuxObjectData:
+    format_in_file = '<BBH3sBBB6s'
+    field_names = [
+        'wall_orientation',
+        'number_of_tiles',
+        'tile_location_index',
+        'unused',
+        'current_frame',
+        'number_of_frames',
+        'flags',
+        'unused'
+    ]
+
+    def __init__(self, data):
+        data = dict(zip(AuxObjectData.field_names, struct.unpack(AuxObjectData.format_in_file, data)))
+        for key in data:
+            if key != 'unused':
+                setattr(self, key, data[key])
 
 class Sti:
     def __init__(self, sti_filename):
@@ -151,13 +170,21 @@ class Sti:
         self.header = StiHeader(self.file.read(header_size))
 
         if self.header.mode == 'rgb':
-            self._load_16bit_rgb_image()
+            self.images = [[self._load_16bit_rgb_image()]]
         else:
             self._load_color_palette()
             self._load_sub_image_headers()
             self.start_of_image_data = self.file.tell()
-            for sub_image_header in self.sub_image_headers:
-                self._load_8bit_indexed_image(sub_image_header)
+            if not self.header.animated:
+                self.images = [[self._load_8bit_indexed_image(self.sub_image_headers[0])]]
+            else:
+                self._load_aux_object_data()
+
+                self.images = []
+                for sub_image_header, aux_object_data in zip(self.sub_image_headers, self.aux_object_data):
+                    if aux_object_data.number_of_frames != 0:
+                        self.images.append([])
+                    self.images[-1].append(self._load_8bit_indexed_image(sub_image_header))
 
     def _load_16bit_rgb_image(self):
         number_of_pixels = self.header.width * self.header.height
@@ -174,16 +201,12 @@ class Sti:
             rgb_image_buffer.write(struct.pack('BBB', r, g, b))
         rgb_image_buffer.seek(0, os.SEEK_SET)
 
-        self.images = [
-            [
-                Image.frombytes(
-                    'RGB',
-                    (self.header.width, self.header.height),
-                    rgb_image_buffer.read(),
-                    'raw'
-                )
-            ]
-        ]
+        return Image.frombytes(
+            'RGB',
+            (self.header.width, self.header.height),
+            rgb_image_buffer.read(),
+            'raw'
+        )
 
     def _load_color_palette(self):
         number_of_palette_bytes = self.header.format_specific_header.number_of_palette_colors * 3
@@ -195,6 +218,20 @@ class Sti:
         for i in range(self.header.format_specific_header.number_of_images):
             data = self.file.read(sub_header_size)
             self.sub_image_headers.append(StiSubImageHeader(data))
+
+    def _load_aux_object_data(self):
+        aux_object_size = struct.calcsize(StiSubImageHeader.format_in_file)
+        last_subimage_header = max(self.sub_image_headers, key=attrgetter('offset'))
+
+        self.file.seek(
+            self.start_of_image_data +
+            last_subimage_header.offset +
+            last_subimage_header.length, os.SEEK_SET)
+
+        self.aux_object_data = []
+        for i in range(self.header.format_specific_header.number_of_images):
+            data = self.file.read(aux_object_size)
+            self.aux_object_data.append(AuxObjectData(data))
 
     def _load_8bit_indexed_image(self, sub_image_header):
         self.file.seek(self.start_of_image_data + sub_image_header.offset, os.SEEK_SET)
@@ -208,9 +245,6 @@ class Sti:
             'raw'
         )
         image.putpalette(self.palette)
-        self.images = [
-            [
-                image
-            ]
-        ]
+
+        return image
 

@@ -19,10 +19,11 @@
 
 import os
 import struct
-import PIL.Image
+from PIL import Image, ImagePalette
 import io
 
 from .common import decode_ja2_string
+from .ETRLE import ERTLE
 
 class StiFileFormatException(Exception):
     """Raised when a STI file is incorrectly formatted"""
@@ -58,7 +59,6 @@ class StiHeader:
             if key != 'unused':
                 setattr(self, key, data[key])
 
-        print(data)
         if self.file_identifier != 'STCI':
             raise StiFileFormatException('Not a STI File')
         if self.get_flag('RGB') and self.get_flag('INDEXED'):
@@ -73,10 +73,11 @@ class StiHeader:
         if self.get_flag('RGB'):
             self.mode = 'rgb'
             self.format_specific_header = Sti16BitHeader(self.format_specific_header)
+            self.animated = False
         else:
             self.mode = 'indexed'
             self.format_specific_header = Sti8BitHeader(self.format_specific_header)
-        self.animated = self.application_data_size != 0
+            self.animated = self.format_specific_header.number_of_images != 1
 
     def get_flag(self, flag_name):
         return (self.flags >> StiHeader.flag_bits[flag_name]) & 1 == 1
@@ -118,6 +119,24 @@ class Sti8BitHeader:
             if key != 'unused':
                 setattr(self, key, data[key])
 
+
+class StiSubImageHeader:
+    format_in_file = '<LLHHHH'
+    field_names = [
+        'offset',
+        'length',
+        'offset_x',
+        'offset_y',
+        'height',
+        'width'
+    ]
+
+    def __init__(self, data):
+        data = dict(zip(StiSubImageHeader.field_names, struct.unpack(StiSubImageHeader.format_in_file, data)))
+        for key in data:
+            setattr(self, key, data[key])
+
+
 class Sti:
     def __init__(self, sti_filename):
         header_size = struct.calcsize(StiHeader.format_in_file)
@@ -133,6 +152,12 @@ class Sti:
 
         if self.header.mode == 'rgb':
             self._load_16bit_rgb_image()
+        else:
+            self._load_color_palette()
+            self._load_sub_image_headers()
+            self.start_of_image_data = self.file.tell()
+            for sub_image_header in self.sub_image_headers:
+                self._load_8bit_indexed_image(sub_image_header)
 
     def _load_16bit_rgb_image(self):
         number_of_pixels = self.header.width * self.header.height
@@ -151,7 +176,7 @@ class Sti:
 
         self.images = [
             [
-                PIL.Image.frombytes(
+                Image.frombytes(
                     'RGB',
                     (self.header.width, self.header.height),
                     rgb_image_buffer.read(),
@@ -159,3 +184,33 @@ class Sti:
                 )
             ]
         ]
+
+    def _load_color_palette(self):
+        number_of_palette_bytes = self.header.format_specific_header.number_of_palette_colors * 3
+        self.palette = ImagePalette.raw("RGB", self.file.read(number_of_palette_bytes))
+
+    def _load_sub_image_headers(self):
+        sub_header_size = struct.calcsize(StiSubImageHeader.format_in_file)
+        self.sub_image_headers = []
+        for i in range(self.header.format_specific_header.number_of_images):
+            data = self.file.read(sub_header_size)
+            self.sub_image_headers.append(StiSubImageHeader(data))
+
+    def _load_8bit_indexed_image(self, sub_image_header):
+        self.file.seek(self.start_of_image_data + sub_image_header.offset, os.SEEK_SET)
+        compressed_data = self.file.read(sub_image_header.length)
+        uncompressed_data = ERTLE(compressed_data).decompress()
+
+        image = Image.frombytes(
+            'P',
+            (sub_image_header.width, sub_image_header.height),
+            uncompressed_data,
+            'raw'
+        )
+        image.putpalette(self.palette)
+        self.images = [
+            [
+                image
+            ]
+        ]
+

@@ -67,11 +67,24 @@ def main():
             print("File Details: ")
             print("Data Type: {} {}bit".format(sti.header.mode, sti.header.color_depth))
             print("Animated: {}".format(sti.header.animated))
-            if sti.header.animated:
+            if sti.header.mode == 'indexed':
+                print("ETRLE compression used: {}".format(sti.header.get_flag('ETRLE')))
                 print("Number of single images: {}".format(sti.header.format_specific_header.number_of_images))
+                for i, sub_image_header in enumerate(sti.sub_image_headers):
+                    print("Subimage {}: Size {}x{}, Shift +{}+{}".format(
+                        i+1,
+                        sub_image_header.width,
+                        sub_image_header.height,
+                        sub_image_header.offset_x,
+                        sub_image_header.offset_y
+                    ))
 
-        if not sti.header.animated:
+        if sti.header.mode != 'indexed':
             sti.images[0][0].save(output_file)
+        else:
+            sti.images[0][0].save(output_file, transparency=0)
+
+        print("Done")
 
 if __name__ == "__main__":
     main()

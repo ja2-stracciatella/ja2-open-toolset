@@ -26,6 +26,9 @@ from PIL import Image, ImagePalette
 from .common import decode_ja2_string
 from .ETRLE import ERTLE
 
+# We expect that no normalized image is larger than the fullscreen size
+MAX_NORMALIZED_IMAGE_SIZE = 640 * 480
+
 class StiFileFormatException(Exception):
     """Raised when a STI file is incorrectly formatted"""
     pass
@@ -195,7 +198,7 @@ class Sti:
 
                 self.images = []
                 for sub_image_header, aux_object_data in zip(self.sub_image_headers, self.aux_object_data):
-                    if aux_object_data.number_of_frames != 0:
+                    if aux_object_data.number_of_frames != 0 or len(self.images) == 0:
                         self.images.append([])
                     self.images[-1].append(self._load_8bit_indexed_image(sub_image_header))
 
@@ -273,6 +276,11 @@ class Sti:
             normalized_offsets_y = [a.offset_y-min_offset_y for a in headers]
             max_width = max([o+a.width for o, a in zip(normalized_offsets_x, headers)])
             max_height = max([o+a.height for o, a in zip(normalized_offsets_y, headers)])
+
+            if max_width * max_height > MAX_NORMALIZED_IMAGE_SIZE:
+                raise StiFileFormatException(
+                    'The offsets are set in such a way that the image size exceeds full-screen.'
+                )
 
             normalized_animation = []
             for i, image in enumerate(animation):

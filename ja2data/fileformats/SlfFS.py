@@ -29,6 +29,7 @@ from fs.memoryfs import MemoryFS
 from .common import decode_ja2_string
 
 
+DIRECTORY_CONFLICT_SUFFIX = '_DIRECTORY_CONFLICT'
 WRITING_NOT_SUPPORTED_ERROR = 'Writing to an SLF is not yet supported. Operation. {}'
 
 
@@ -164,7 +165,7 @@ class SlfFS(FS):
                 # Sometimes there exists a file that has the same name as a directory
                 # Solution: Rename it with a _DIRECTORY_CONFLICT suffix
                 self._path_fs.remove(directory[:-1])
-                self._path_fs.createfile(directory[:-1] + '_DIRECTORY_CONFLICT')
+                self._path_fs.createfile(directory[:-1] + DIRECTORY_CONFLICT_SUFFIX)
             self._path_fs.makedir(directory, recursive=True, allow_recreate=True)
             self._path_fs.createfile(e.file_name)
 
@@ -222,4 +223,6 @@ class SlfFS(FS):
         raise UnsupportedError(WRITING_NOT_SUPPORTED_ERROR.format('rename'))
 
     def _get_slf_entry_for_path(self, path):
+        if path.endswith(DIRECTORY_CONFLICT_SUFFIX):
+            path = path[:-len(DIRECTORY_CONFLICT_SUFFIX)]
         return next(e for e in self.entries if e.file_name == path)

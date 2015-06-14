@@ -25,12 +25,38 @@ import sys
 
 sys.path.append(os.getcwd())
 
-from fileformats import Sti
+from fileformats.Sti import Sti, StiFileFormatException
 
 def write_sequence_of_8bit_images_to_target_directory(sequence, target_directory):
     for image_index, image in enumerate(sequence):
         image_file = os.path.join(target_directory, '{}.png'.format(image_index))
         image.save(image_file, transparency=0)
+
+def write_png_from_sti(output_file, sti, normalize):
+    if sti.header.mode != 'indexed':
+        sti.images[0][0].save(output_file)
+    else:
+        if sti.header.format_specific_header.number_of_images > 1:
+            base_dir = os.path.splitext(output_file)[0] + '.PNG'
+            if not os.path.exists(base_dir):
+                os.makedirs(base_dir)
+
+            if sti.header.animated and normalize:
+                try:
+                    sti.normalize_animated_images()
+                except StiFileFormatException as e:
+                    print("Warning: {} not normalized because of error: {}".format(base_dir, str(e)))
+
+            if len(sti.images) == 1:
+                write_sequence_of_8bit_images_to_target_directory(sti.images[0], base_dir)
+            else:
+                for animation_index, animation in enumerate(sti.images):
+                    animation_target_dir = os.path.join(base_dir, str(animation_index))
+                    if not os.path.exists(animation_target_dir):
+                        os.mkdir(animation_target_dir)
+                    write_sequence_of_8bit_images_to_target_directory(animation, animation_target_dir)
+        else:
+            sti.images[0][0].save(output_file, transparency=0)
 
 def main():
     parser = argparse.ArgumentParser(description='STI to PNG Converter')
@@ -68,7 +94,7 @@ def main():
     output_file = os.path.normpath(os.path.abspath(output_file))
 
     if args.verbose:
-        print("Input file:    {}".format(sti_file))
+        print("Input file:  {}".format(sti_file))
         print("Output file: {}".format(output_file))
 
     with open(sti_file, 'rb') as file:
@@ -90,26 +116,7 @@ def main():
                         sub_image_header.offset_y
                     ))
 
-        if sti.header.mode != 'indexed':
-            sti.images[0][0].save(output_file)
-        else:
-            if sti.header.format_specific_header.number_of_images > 1:
-                base_dir = os.path.splitext(output_file)[0]
-                if not os.path.exists(base_dir):
-                    os.mkdir(base_dir)
-
-                if len(sti.images) == 1:
-                    write_sequence_of_8bit_images_to_target_directory(sti.images[0], base_dir)
-                else:
-                    if args.normalize:
-                        sti.normalize_animated_images()
-                    for animation_index, animation in enumerate(sti.images):
-                        animation_target_dir = os.path.join(base_dir, str(animation_index))
-                        if not os.path.exists(animation_target_dir):
-                            os.mkdir(animation_target_dir)
-                        write_sequence_of_8bit_images_to_target_directory(animation, animation_target_dir)
-            else:
-                sti.images[0][0].save(output_file, transparency=0)
+        write_png_from_sti(output_file, sti, args.normalize)
 
         print("Done")
 

@@ -248,3 +248,27 @@ class Sti:
 
         return image
 
+    def normalize_animated_images(self):
+        normalized_images = []
+        animation_start_index = 0
+        for animation in self.images:
+            headers = self.sub_image_headers[animation_start_index:animation_start_index+len(animation)]
+
+            min_offset_x = min([a.offset_x for a in headers])
+            min_offset_y = min([a.offset_y for a in headers])
+            normalized_offsets_x = [a.offset_x-min_offset_x for a in headers]
+            normalized_offsets_y = [a.offset_y-min_offset_y for a in headers]
+            max_width = max([o+a.width for o, a in zip(normalized_offsets_x, headers)])
+            max_height = max([o+a.height for o, a in zip(normalized_offsets_y, headers)])
+
+            normalized_animation = []
+            for i, image in enumerate(animation):
+                normalized_image = Image.new('P', (max_width, max_height), 0)
+                normalized_image.putpalette(self.palette)
+                normalized_image.paste(image, (normalized_offsets_x[i], normalized_offsets_y[i]))
+                normalized_animation.append(normalized_image)
+
+            normalized_images.append(normalized_animation)
+            animation_start_index += len(headers)
+
+        self.images = normalized_images

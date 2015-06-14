@@ -38,6 +38,13 @@ def main():
         help="output file for converted STI. For animated files this will be used as a base for numerated files. By default the file(s) will be named the same as the STI file."
     )
     parser.add_argument(
+        '-n',
+        '--normalize',
+        action='store_true',
+        default=False,
+        help="make all images inside an animated STI have the same size and display the same positional content"
+    )
+    parser.add_argument(
         '-v',
         '--verbose',
         action='store_true',
@@ -83,6 +90,9 @@ def main():
             sti.images[0][0].save(output_file)
         else:
             if sti.header.animated:
+                if args.normalize:
+                    sti.normalize_animated_images()
+
                 base_dir = os.path.splitext(output_file)[0]
                 if not os.path.exists(base_dir):
                     os.mkdir(base_dir)

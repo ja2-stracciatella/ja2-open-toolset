@@ -27,6 +27,10 @@ sys.path.append(os.getcwd())
 
 from fileformats import Sti
 
+def write_sequence_of_8bit_images_to_target_directory(sequence, target_directory):
+    for image_index, image in enumerate(sequence):
+        image_file = os.path.join(target_directory, '{}.png'.format(image_index))
+        image.save(image_file, transparency=0)
 
 def main():
     parser = argparse.ArgumentParser(description='STI to PNG Converter')
@@ -89,20 +93,21 @@ def main():
         if sti.header.mode != 'indexed':
             sti.images[0][0].save(output_file)
         else:
-            if sti.header.animated:
-                if args.normalize:
-                    sti.normalize_animated_images()
-
+            if sti.header.format_specific_header.number_of_images > 1:
                 base_dir = os.path.splitext(output_file)[0]
                 if not os.path.exists(base_dir):
                     os.mkdir(base_dir)
-                for animation_index, animation in enumerate(sti.images):
-                    animation_target_dir = os.path.join(base_dir, str(animation_index))
-                    if not os.path.exists(animation_target_dir):
-                        os.mkdir(animation_target_dir)
-                    for image_index, image in enumerate(animation):
-                        image_file = os.path.join(animation_target_dir, '{}.png'.format(image_index))
-                        image.save(image_file, transparency=0)
+
+                if len(sti.images) == 1:
+                    write_sequence_of_8bit_images_to_target_directory(sti.images[0], base_dir)
+                else:
+                    if args.normalize:
+                        sti.normalize_animated_images()
+                    for animation_index, animation in enumerate(sti.images):
+                        animation_target_dir = os.path.join(base_dir, str(animation_index))
+                        if not os.path.exists(animation_target_dir):
+                            os.mkdir(animation_target_dir)
+                        write_sequence_of_8bit_images_to_target_directory(animation, animation_target_dir)
             else:
                 sti.images[0][0].save(output_file, transparency=0)
 

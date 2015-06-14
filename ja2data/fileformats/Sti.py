@@ -78,7 +78,7 @@ class StiHeader:
         else:
             self.mode = 'indexed'
             self.format_specific_header = Sti8BitHeader(self.format_specific_header)
-            self.animated = self.format_specific_header.number_of_images != 1
+            self.animated = self.application_data_size != 0
 
     def get_flag(self, flag_name):
         return (self.flags >> StiHeader.flag_bits[flag_name]) & 1 == 1
@@ -176,7 +176,11 @@ class Sti:
             self._load_sub_image_headers()
             self.start_of_image_data = self.file.tell()
             if not self.header.animated:
-                self.images = [[self._load_8bit_indexed_image(self.sub_image_headers[0])]]
+                self.images = [
+                    [
+                        self._load_8bit_indexed_image(s) for s in self.sub_image_headers
+                    ]
+                ]
             else:
                 self._load_aux_object_data()
 

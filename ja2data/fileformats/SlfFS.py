@@ -21,6 +21,7 @@ import os
 import struct
 import re
 from time import ctime
+import io
 from fs.base import FS
 from fs.errors import CreateFailedError, UnsupportedError, ResourceNotFoundError, ResourceInvalidError
 from fs.filelike import FileLikeBase
@@ -80,41 +81,6 @@ class SlfHeader:
         data['library_path'] = decode_ja2_string(data["library_path"])
         for key in data:
             setattr(self, key, data[key])
-
-class PartialFile(FileLikeBase):
-    """
-    This implements a file inside a SLF archive with offset {offset} and length {size}
-    """
-    def __init__(self, slf_file, offset, size):
-        super(PartialFile, self).__init__()
-        self.file = slf_file
-        self.min = offset
-        self.max = offset + size
-
-        self.file.seek(self.min, os.SEEK_SET)
-
-    def _read(self, sizehint=-1):
-        current = self.file.tell()
-        is_not_over_max = sizehint != -1 and current + sizehint <= self.max
-        sizehint = sizehint if is_not_over_max else self.max - current
-        return self.file.read(sizehint) if sizehint != 0 else None
-
-    def _seek(self, offset, whence):
-        if whence == os.SEEK_CUR:
-            pos = self.file.tell() + offset
-        elif whence == os.SEEK_SET:
-            pos = self.min + offset
-        elif whence == os.SEEK_END:
-            pos = self.max + offset
-        else:
-            raise NotImplementedError('Unsupported Seek Type')
-        pos = pos if pos >= self.min else self.min
-        pos = pos if pos <= self.max else self.max
-
-        return self.file.seek(pos, os.SEEK_CUR)
-
-    def _tell(self):
-        return self.file.tell() - self.offset
 
 
 class SlfFS(FS):
@@ -195,7 +161,9 @@ class SlfFS(FS):
         if self.isdir(path):
             raise ResourceInvalidError(path)
         slf_entry = self._get_slf_entry_for_path(path)
-        return PartialFile(self.file, slf_entry.offset, slf_entry.length)
+
+        self.file.seek(slf_entry.offset, os.SEEK_SET)
+        return io.BytesIO(self.file.read(slf_entry.length))
 
     def getinfo(self, path):
         if not self.exists(path):

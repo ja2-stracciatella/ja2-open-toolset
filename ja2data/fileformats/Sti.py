@@ -31,7 +31,7 @@ class StiFileFormatException(Exception):
     pass
 
 class StiHeader:
-    format_in_file = '<4sLLLLHH20sBH17s'
+    format_in_file = '<4sLLLLHH20sB3sL12s'
     field_names = [
         'file_identifier',
         'initial_size',
@@ -42,7 +42,8 @@ class StiHeader:
         'width',
         'format_specific_header',
         'color_depth',
-        'application_data_size',
+        'unused',
+        'aux_data_size',
         'unused'
     ]
 
@@ -54,6 +55,8 @@ class StiHeader:
     }
 
     def __init__(self, data):
+        aux_object_data_size = struct.calcsize(AuxObjectData.format_in_file)
+
         data = dict(zip(StiHeader.field_names, struct.unpack(StiHeader.format_in_file, data)))
         data['file_identifier'] = decode_ja2_string(data["file_identifier"])
         for key in data:
@@ -78,7 +81,13 @@ class StiHeader:
         else:
             self.mode = 'indexed'
             self.format_specific_header = Sti8BitHeader(self.format_specific_header)
-            self.animated = self.application_data_size != 0
+            self.animated = self.aux_data_size != 0
+            expected_aux_data_size = self.format_specific_header.number_of_images * aux_object_data_size
+            if self.animated and self.aux_data_size != expected_aux_data_size:
+                raise(StiFileFormatException("Application Data expected to be {} was {}".format(
+                    self.format_specific_header.number_of_images * struct.calcsize(AuxObjectData.format_in_file),
+                    self.aux_data_size
+                )))
 
     def get_flag(self, flag_name):
         return (self.flags >> StiHeader.flag_bits[flag_name]) & 1 == 1

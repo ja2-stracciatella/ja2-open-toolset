@@ -20,15 +20,15 @@
 import os
 import struct
 import re
-from time import ctime
 import io
+from time import localtime, mktime
+from functools import partial
 from fs.base import FS
 from fs.errors import CreateFailedError, UnsupportedError, ResourceNotFoundError, ResourceInvalidError
-from fs.filelike import FileLikeBase
 from fs.memoryfs import MemoryFS
+from fs.multifs import MultiFS
 
-from .common import decode_ja2_string
-
+from .common import decode_ja2_string, encode_ja2_string
 
 DIRECTORY_CONFLICT_SUFFIX = '_DIRECTORY_CONFLICT'
 WRITING_NOT_SUPPORTED_ERROR = 'Writing to an SLF is not yet supported. Operation. {}'
@@ -49,12 +49,30 @@ class SlfEntry:
         'reserved2'
     ]
 
-    def __init__(self, data):
-        data = dict(zip(SlfEntry.field_names, struct.unpack(SlfEntry.format_in_file, data)))
-        data["file_name"] = '/' + re.sub(r'[\\]+', '/', decode_ja2_string(data["file_name"]))
-        data["time"] = ctime(data["time"] / 10000000 - 11644473600)
-        for key in data:
-            setattr(self, key, data[key])
+    def __init__(self, data=None):
+        if data:
+            attributes = dict(zip(SlfEntry.field_names, struct.unpack(SlfEntry.format_in_file, data)))
+            attributes["file_name"] = '/' + re.sub(r'[\\]+', '/', decode_ja2_string(attributes["file_name"]))
+            attributes["time"] = localtime(attributes["time"] / 10000000 - 11644473600)
+        else:
+            attributes = {
+                'file_name': 'Some File',
+                'offset': 0,
+                'length': 0,
+                'state': 0,
+                'reserved': 0,
+                'time': localtime(),
+                'reserved2': 0
+            }
+
+        for key in attributes:
+            setattr(self, key, attributes[key])
+
+    def to_bytes(self):
+        attributes = dict(zip(SlfEntry.field_names, map(partial(getattr, self), SlfEntry.field_names)))
+        attributes["file_name"] = encode_ja2_string(attributes["file_name"][1:].replace('/', '\\'), pad=256)
+        attributes["time"] = int((mktime(attributes["time"]) + 11644473600) * 10000000)
+        return struct.pack(SlfEntry.format_in_file, *list(map(attributes.get, SlfEntry.field_names)))
 
     def __str__(self):
         return '<SlfEntry: {0}>'.format(list(map(lambda f: getattr(self, f), self.field_names)))
@@ -75,12 +93,34 @@ class SlfHeader:
         'reserved'
     ]
 
-    def __init__(self, data):
-        data = dict(zip(SlfHeader.field_names, struct.unpack(SlfHeader.format_in_file, data)))
-        data['library_name'] = decode_ja2_string(data["library_name"])
-        data['library_path'] = decode_ja2_string(data["library_path"])
-        for key in data:
-            setattr(self, key, data[key])
+    def __init__(self, data=None):
+        if data:
+            attributes = dict(zip(SlfHeader.field_names, struct.unpack(SlfHeader.format_in_file, data)))
+            attributes['library_name'] = decode_ja2_string(attributes["library_name"])
+            attributes['library_path'] = decode_ja2_string(attributes["library_path"])
+        else:
+            attributes = {
+                'library_name': 'Custom',
+                'library_path': 'Custom.slf',
+                'number_of_entries': 0,
+                'used': 0,
+                'sort': 65535,
+                'version': 512,
+                'contains_subdirectories': 1,
+                'reserved': 0,
+            }
+
+        for key in attributes:
+            setattr(self, key, attributes[key])
+
+    def to_bytes(self):
+        attributes = dict(zip(SlfHeader.field_names, map(partial(getattr, self), SlfHeader.field_names)))
+        attributes['library_name'] = encode_ja2_string(attributes["library_name"], pad=256)
+        attributes['library_path'] = encode_ja2_string(attributes["library_path"], pad=256)
+        return struct.pack(SlfHeader.format_in_file, *list(map(attributes.get, SlfHeader.field_names)))
+
+    def __str__(self):
+        return '<SlfHeader: {0}>'.format(list(map(lambda f: getattr(self, f), self.field_names)))
 
 
 class SlfFS(FS):
@@ -194,3 +234,45 @@ class SlfFS(FS):
         if path.endswith(DIRECTORY_CONFLICT_SUFFIX):
             path = path[:-len(DIRECTORY_CONFLICT_SUFFIX)]
         return next(e for e in self.entries if e.file_name == path)
+
+class BufferedSlfFS(MultiFS):
+    def __init__(self, slf_filename=None):
+        super(BufferedSlfFS, self).__init__()
+
+        self.header = SlfHeader()
+        if slf_filename is not None:
+            self._file_fs = SlfFS(slf_filename)
+            self.addfs('file', self._file_fs)
+            self.header.library_name = self._file_fs.header.library_name
+            self.header.library_path = self._file_fs.header.library_path
+
+        self._memory_fs = MemoryFS()
+        self.addfs('memory', self._memory_fs, write=True)
+
+    def save(self, to_file):
+        with open(to_file, 'wb+') as file:
+            header_size = struct.calcsize(SlfHeader.format_in_file)
+            entry_size = struct.calcsize(SlfEntry.format_in_file)
+            names = list(self.walkfiles('/'))
+
+            offset_start = header_size
+            sizes = list(map(lambda f: self.getinfo(f)['size'], names))
+            times = list(map(lambda f: self.getinfo(f)['modified_time'], names))
+            offsets = list(map(lambda i:  sum(sizes[:i]) + offset_start, range(len(sizes))))
+            self.header.number_of_entries = len(names)
+            self.header.used = len(names)
+
+            file.write(self.header.to_bytes())
+
+            for name in names:
+                with self.open(name, 'rb') as f:
+                    file.write(f.read())
+            for name, modified_time, size, offset in zip(names, times, sizes, offsets):
+                entry_header = SlfEntry()
+                entry_header.file_name = name
+                entry_header.offset = offset
+                entry_header.length = size
+                entry_header.modified_time = modified_time
+                file.write(entry_header.to_bytes())
+
+

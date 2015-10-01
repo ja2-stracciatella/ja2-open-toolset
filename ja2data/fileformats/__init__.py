@@ -18,4 +18,5 @@
 ##############################################################################
 
 from .SlfFS import SlfFS
+from .SlfFS import BufferedSlfFS
 from .Sti import Sti

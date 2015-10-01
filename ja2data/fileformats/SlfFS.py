@@ -249,6 +249,11 @@ class BufferedSlfFS(MultiFS):
         self._memory_fs = MemoryFS()
         self.addfs('memory', self._memory_fs, write=True)
 
+    def remove(self, path):
+        if self._file_fs.exists(path):
+            return self._file_fs._path_fs.remove(path)
+        return super(BufferedSlfFS, self).remove(path)
+
     def save(self, to_file):
         with open(to_file, 'wb+') as file:
             header_size = struct.calcsize(SlfHeader.format_in_file)

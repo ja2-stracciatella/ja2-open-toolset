@@ -17,6 +17,10 @@
 #
 ##############################################################################
 
+from functools import partial
+import struct
+
+
 def decode_ja2_string(string):
     return string.decode("ascii").replace("\x00", "")
 
@@ -25,3 +29,40 @@ def encode_ja2_string(string, pad=None):
     if pad is not None:
         return encoded.ljust(pad, b'\x00')
     return encoded
+
+class Ja2FileHeader:
+    format_in_file = ''
+    field_names = []
+    default_data = []
+    flags = None
+
+    def __init__(self, data=None):
+        if data:
+            raw_data = dict(zip(self.field_names, struct.unpack(self.format_in_file, data)))
+            attributes = self.get_attributes_from_data(raw_data)
+        else:
+            attributes = dict(zip(self.field_names, self.default_data))
+
+        for key in attributes:
+            setattr(self, key, attributes[key])
+
+    def get_attributes_from_data(self, data_dict):
+        return data_dict
+
+    def get_attributes_from_fields(self, attribute_dict):
+        return attribute_dict
+
+    def to_bytes(self):
+        attributes = dict(zip(self.field_names, map(partial(getattr, self), self.field_names)))
+        raw_data = self.get_attributes_from_fields(attributes)
+        return struct.pack(self.format_in_file, *list(map(raw_data.get, self.field_names)))
+
+    def get_flag(self, flag_name):
+        if self.flags is None:
+            raise Exception('{}: No flags set')
+        if flag_name not in self.flag_bits:
+            raise Exception('{}: Unknown Flag: "{}"', self.__class__.__name__, flag_name)
+        return (self.flags >> self.flag_bits[flag_name]) & 1 == 1
+
+    def __str__(self):
+        return '<{}: {}>'.format(self.__class__.__name__, list(map(lambda f: getattr(self, f), self.field_names)))

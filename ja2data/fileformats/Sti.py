@@ -23,7 +23,7 @@ import struct
 from operator import attrgetter
 from PIL import Image, ImagePalette
 
-from .common import decode_ja2_string
+from .common import decode_ja2_string, Ja2FileHeader, encode_ja2_string
 from .ETRLE import ERTLE
 
 # We expect that no normalized image is larger than the fullscreen size
@@ -33,7 +33,7 @@ class StiFileFormatException(Exception):
     """Raised when a STI file is incorrectly formatted"""
     pass
 
-class StiHeader:
+class StiHeader(Ja2FileHeader):
     format_in_file = '<4sLLLLHH20sB3sL12s'
     field_names = [
         'file_identifier',
@@ -49,6 +49,20 @@ class StiHeader:
         'aux_data_size',
         'unused'
     ]
+    default_values = [
+        'STCI',
+        0,
+        0,
+        0,
+        40,
+        0,
+        0,
+        None,
+        8,
+        0,
+        0,
+        0
+    ]
 
     flag_bits = {
         'RGB': 2,
@@ -58,13 +72,8 @@ class StiHeader:
     }
 
     def __init__(self, data):
+        super(StiHeader, self).__init__(data)
         aux_object_data_size = struct.calcsize(AuxObjectData.format_in_file)
-
-        data = dict(zip(StiHeader.field_names, struct.unpack(StiHeader.format_in_file, data)))
-        data['file_identifier'] = decode_ja2_string(data["file_identifier"])
-        for key in data:
-            if key != 'unused':
-                setattr(self, key, data[key])
 
         if self.file_identifier != 'STCI':
             raise StiFileFormatException('Not a STI File')
@@ -92,10 +101,16 @@ class StiHeader:
                     self.aux_data_size
                 )))
 
-    def get_flag(self, flag_name):
-        return (self.flags >> StiHeader.flag_bits[flag_name]) & 1 == 1
+    def get_attributes_from_data(self, data_dict):
+        data_dict['file_identifier'] = decode_ja2_string(data_dict["file_identifier"])
+        return data_dict
 
-class Sti16BitHeader:
+    def get_data_from_attributes(self, attributes_dict):
+        attributes_dict['file_identifier'] = encode_ja2_string(attributes_dict["file_identifier"], pad=4)
+        attributes_dict['format_specific_header'] = self.format_specific_header.to_bytes()
+        return attributes_dict
+
+class Sti16BitHeader(Ja2FileHeader):
     format_in_file = '<LLLLBBBB'
     field_names = [
         'red_color_mask',
@@ -108,14 +123,7 @@ class Sti16BitHeader:
         'alpha_channel_depth',
     ]
 
-    def __init__(self, data):
-        data = dict(zip(Sti16BitHeader.field_names, struct.unpack(Sti16BitHeader.format_in_file, data)))
-        for key in data:
-            if key != 'unused':
-                setattr(self, key, data[key])
-
-
-class Sti8BitHeader:
+class Sti8BitHeader(Ja2FileHeader):
     format_in_file = '<LHBBB11s'
     field_names = [
         'number_of_palette_colors',
@@ -126,14 +134,7 @@ class Sti8BitHeader:
         'unused'
     ]
 
-    def __init__(self, data):
-        data = dict(zip(Sti8BitHeader.field_names, struct.unpack(Sti8BitHeader.format_in_file, data)))
-        for key in data:
-            if key != 'unused':
-                setattr(self, key, data[key])
-
-
-class StiSubImageHeader:
+class StiSubImageHeader(Ja2FileHeader):
     format_in_file = '<LLHHHH'
     field_names = [
         'offset',
@@ -144,12 +145,7 @@ class StiSubImageHeader:
         'width'
     ]
 
-    def __init__(self, data):
-        data = dict(zip(StiSubImageHeader.field_names, struct.unpack(StiSubImageHeader.format_in_file, data)))
-        for key in data:
-            setattr(self, key, data[key])
-
-class AuxObjectData:
+class AuxObjectData(Ja2FileHeader):
     format_in_file = '<BBH3sBBB6s'
     field_names = [
         'wall_orientation',
@@ -161,12 +157,6 @@ class AuxObjectData:
         'flags',
         'unused'
     ]
-
-    def __init__(self, data):
-        data = dict(zip(AuxObjectData.field_names, struct.unpack(AuxObjectData.format_in_file, data)))
-        for key in data:
-            if key != 'unused':
-                setattr(self, key, data[key])
 
 class Sti:
     def __init__(self, sti_filename):

@@ -22,19 +22,18 @@ import struct
 import re
 import io
 from time import localtime, mktime
-from functools import partial
 from fs.base import FS
 from fs.errors import CreateFailedError, UnsupportedError, ResourceNotFoundError, ResourceInvalidError
 from fs.memoryfs import MemoryFS
 from fs.multifs import MultiFS
 
-from .common import decode_ja2_string, encode_ja2_string
+from .common import decode_ja2_string, encode_ja2_string, Ja2FileHeader
 
 DIRECTORY_CONFLICT_SUFFIX = '_DIRECTORY_CONFLICT'
 WRITING_NOT_SUPPORTED_ERROR = 'Writing to an SLF is not yet supported. Operation. {}'
 
 
-class SlfEntry:
+class SlfEntry(Ja2FileHeader):
     """
     Class Representation of a SlfEntry that represents a single file inside a slf file
     """
@@ -48,36 +47,30 @@ class SlfEntry:
         'time',
         'reserved2'
     ]
+    default_data = [
+            'Some File',
+            0,
+            0,
+            0,
+            0,
+            None,
+            0
+    ]
 
-    def __init__(self, data=None):
-        if data:
-            attributes = dict(zip(SlfEntry.field_names, struct.unpack(SlfEntry.format_in_file, data)))
-            attributes["file_name"] = '/' + re.sub(r'[\\]+', '/', decode_ja2_string(attributes["file_name"]))
-            attributes["time"] = localtime(attributes["time"] / 10000000 - 11644473600)
+    def get_attributes_from_data(self, data_dict):
+        data_dict["file_name"] = '/' + re.sub(r'[\\]+', '/', decode_ja2_string(data_dict["file_name"]))
+        return data_dict
+
+    def get_data_from_attributes(self, attributes_dict):
+        attributes_dict["file_name"] = encode_ja2_string(attributes_dict["file_name"][1:].replace('/', '\\'), pad=256)
+        if attributes_dict["time"] is not None:
+            attributes_dict["time"] = int((mktime(attributes_dict["time"]) + 11644473600) * 10000000)
         else:
-            attributes = {
-                'file_name': 'Some File',
-                'offset': 0,
-                'length': 0,
-                'state': 0,
-                'reserved': 0,
-                'time': localtime(),
-                'reserved2': 0
-            }
+            attributes_dict["time"] = localtime()
+        return  attributes_dict
 
-        for key in attributes:
-            setattr(self, key, attributes[key])
 
-    def to_bytes(self):
-        attributes = dict(zip(SlfEntry.field_names, map(partial(getattr, self), SlfEntry.field_names)))
-        attributes["file_name"] = encode_ja2_string(attributes["file_name"][1:].replace('/', '\\'), pad=256)
-        attributes["time"] = int((mktime(attributes["time"]) + 11644473600) * 10000000)
-        return struct.pack(SlfEntry.format_in_file, *list(map(attributes.get, SlfEntry.field_names)))
-
-    def __str__(self):
-        return '<SlfEntry: {0}>'.format(list(map(lambda f: getattr(self, f), self.field_names)))
-
-class SlfHeader:
+class SlfHeader(Ja2FileHeader):
     """
     Class Representation of the SLFHeader that is at the top of every SLF File
     """
@@ -93,34 +86,15 @@ class SlfHeader:
         'reserved'
     ]
 
-    def __init__(self, data=None):
-        if data:
-            attributes = dict(zip(SlfHeader.field_names, struct.unpack(SlfHeader.format_in_file, data)))
-            attributes['library_name'] = decode_ja2_string(attributes["library_name"])
-            attributes['library_path'] = decode_ja2_string(attributes["library_path"])
-        else:
-            attributes = {
-                'library_name': 'Custom',
-                'library_path': 'Custom.slf',
-                'number_of_entries': 0,
-                'used': 0,
-                'sort': 65535,
-                'version': 512,
-                'contains_subdirectories': 1,
-                'reserved': 0,
-            }
+    def get_attributes_from_data(self, data_dict):
+        data_dict['library_name'] = decode_ja2_string(data_dict["library_name"])
+        data_dict['library_path'] = decode_ja2_string(data_dict["library_path"])
+        return data_dict
 
-        for key in attributes:
-            setattr(self, key, attributes[key])
-
-    def to_bytes(self):
-        attributes = dict(zip(SlfHeader.field_names, map(partial(getattr, self), SlfHeader.field_names)))
-        attributes['library_name'] = encode_ja2_string(attributes["library_name"], pad=256)
-        attributes['library_path'] = encode_ja2_string(attributes["library_path"], pad=256)
-        return struct.pack(SlfHeader.format_in_file, *list(map(attributes.get, SlfHeader.field_names)))
-
-    def __str__(self):
-        return '<SlfHeader: {0}>'.format(list(map(lambda f: getattr(self, f), self.field_names)))
+    def get_data_from_attributes(self, attributes_dict):
+        attributes_dict['library_name'] = encode_ja2_string(attributes_dict["library_name"], pad=256)
+        attributes_dict['library_path'] = encode_ja2_string(attributes_dict["library_path"], pad=256)
+        return  attributes_dict
 
 
 class SlfFS(FS):

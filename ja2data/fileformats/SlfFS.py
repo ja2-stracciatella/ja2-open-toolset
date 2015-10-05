@@ -63,11 +63,9 @@ class SlfEntry(Ja2FileHeader):
 
     def get_data_from_attributes(self, attributes_dict):
         attributes_dict["file_name"] = encode_ja2_string(attributes_dict["file_name"][1:].replace('/', '\\'), pad=256)
-        if attributes_dict["time"] is not None:
-            attributes_dict["time"] = int((mktime(attributes_dict["time"]) + 11644473600) * 10000000)
-        else:
-            attributes_dict["time"] = localtime()
-        return  attributes_dict
+        time = attributes_dict["time"] if attributes_dict["time"] is not None else localtime()
+        attributes_dict["time"] = int((mktime(time) + 11644473600) * 10000000)
+        return attributes_dict
 
 
 class SlfHeader(Ja2FileHeader):
@@ -85,6 +83,16 @@ class SlfHeader(Ja2FileHeader):
         'contains_subdirectories',
         'reserved'
     ]
+    default_data = [
+        'Custom',
+        'Custom.slf',
+        0,
+        0,
+        65535,
+        512,
+        1,
+        0
+    ]
 
     def get_attributes_from_data(self, data_dict):
         data_dict['library_name'] = decode_ja2_string(data_dict["library_name"])
@@ -94,7 +102,7 @@ class SlfHeader(Ja2FileHeader):
     def get_data_from_attributes(self, attributes_dict):
         attributes_dict['library_name'] = encode_ja2_string(attributes_dict["library_name"], pad=256)
         attributes_dict['library_path'] = encode_ja2_string(attributes_dict["library_path"], pad=256)
-        return  attributes_dict
+        return attributes_dict
 
 
 class SlfFS(FS):

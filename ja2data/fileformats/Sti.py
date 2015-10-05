@@ -33,6 +33,7 @@ class StiFileFormatException(Exception):
     """Raised when a STI file is incorrectly formatted"""
     pass
 
+
 class StiHeader(Ja2FileHeader):
     format_in_file = '<4sLLLLHH20sB3sL12s'
     field_names = [
@@ -47,7 +48,7 @@ class StiHeader(Ja2FileHeader):
         'color_depth',
         'unused',
         'aux_data_size',
-        'unused'
+        'unused2'
     ]
     default_values = [
         'STCI',
@@ -59,9 +60,9 @@ class StiHeader(Ja2FileHeader):
         0,
         None,
         8,
+        '123',
         0,
-        0,
-        0
+        '123456789012'
     ]
 
     flag_bits = {
@@ -110,6 +111,7 @@ class StiHeader(Ja2FileHeader):
         attributes_dict['format_specific_header'] = self.format_specific_header.to_bytes()
         return attributes_dict
 
+
 class Sti16BitHeader(Ja2FileHeader):
     format_in_file = '<LLLLBBBB'
     field_names = [
@@ -123,6 +125,7 @@ class Sti16BitHeader(Ja2FileHeader):
         'alpha_channel_depth',
     ]
 
+
 class Sti8BitHeader(Ja2FileHeader):
     format_in_file = '<LHBBB11s'
     field_names = [
@@ -134,6 +137,7 @@ class Sti8BitHeader(Ja2FileHeader):
         'unused'
     ]
 
+
 class StiSubImageHeader(Ja2FileHeader):
     format_in_file = '<LLHHHH'
     field_names = [
@@ -144,6 +148,7 @@ class StiSubImageHeader(Ja2FileHeader):
         'height',
         'width'
     ]
+
 
 class AuxObjectData(Ja2FileHeader):
     format_in_file = '<BBH3sBBB6s'
@@ -157,6 +162,7 @@ class AuxObjectData(Ja2FileHeader):
         'flags',
         'unused'
     ]
+
 
 class Sti:
     def __init__(self, sti_filename):
@@ -213,6 +219,19 @@ class Sti:
             rgb_image_buffer.read(),
             'raw'
         )
+
+    def _save_16bit_rgb_image(self):
+        w, h = self.header.width, self.header.height
+        write_buffer = io.BytesIO()
+        for y in range(h):
+            for x in range(w):
+                pix = self.images[0][0].getpixel((x, y))
+                r = pix[0] >> 3
+                g = pix[1] >> 3
+                b = pix[2] >> 3
+                rgb = b + (g << 6) + (r << 11)
+                write_buffer.write(struct.pack('<H', rgb))
+        return write_buffer.getvalue()
 
     def _load_color_palette(self):
         number_of_palette_bytes = self.header.format_specific_header.number_of_palette_colors * 3
@@ -283,3 +302,8 @@ class Sti:
             animation_start_index += len(headers)
 
         self.images = normalized_images
+
+    def save(self, to_file):
+        to_file.write(self.header.to_bytes())
+        if self.header.mode == 'rgb':
+            to_file.write(self._save_16bit_rgb_image())

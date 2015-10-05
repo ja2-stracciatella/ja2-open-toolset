@@ -30,7 +30,7 @@ def encode_ja2_string(string, pad=None):
         return encoded.ljust(pad, b'\x00')
     return encoded
 
-class Ja2FileHeader:
+class Ja2FileHeader(object):
     format_in_file = ''
     field_names = []
     default_data = []
@@ -49,12 +49,12 @@ class Ja2FileHeader:
     def get_attributes_from_data(self, data_dict):
         return data_dict
 
-    def get_attributes_from_fields(self, attribute_dict):
+    def get_data_from_attributes(self, attribute_dict):
         return attribute_dict
 
     def to_bytes(self):
         attributes = dict(zip(self.field_names, map(partial(getattr, self), self.field_names)))
-        raw_data = self.get_attributes_from_fields(attributes)
+        raw_data = self.get_data_from_attributes(attributes)
         return struct.pack(self.format_in_file, *list(map(raw_data.get, self.field_names)))
 
     def get_flag(self, flag_name):

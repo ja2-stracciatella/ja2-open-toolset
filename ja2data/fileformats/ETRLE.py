@@ -30,7 +30,7 @@ class EtrleException(Exception):
     pass
 
 
-class ERTLE:
+class ETRLE:
     def __init__(self, data):
         self.data = data
 

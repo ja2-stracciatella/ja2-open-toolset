@@ -65,4 +65,4 @@ class Ja2FileHeader(object):
         return (self.flags >> self.flag_bits[flag_name]) & 1 == 1
 
     def __str__(self):
-        return '<{}: {}>'.format(self.__class__.__name__, list(map(lambda f: getattr(self, f), self.field_names)))
+        return '<{}: {}>'.format(self.__class__.__name__, dict(zip(self.field_names, map(lambda f: getattr(self, f), self.field_names))))

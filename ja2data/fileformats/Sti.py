@@ -257,12 +257,10 @@ class Sti:
 
     def _load_aux_object_data(self):
         aux_object_size = struct.calcsize(StiSubImageHeader.format_in_file)
-        last_subimage_header = max(self.sub_image_headers, key=attrgetter('offset'))
 
         self.file.seek(
             self.start_of_image_data +
-            last_subimage_header.offset +
-            last_subimage_header.length, os.SEEK_SET)
+            self.header.size_after_compression, os.SEEK_SET)
 
         self.aux_object_data = []
         for i in range(self.header.format_specific_header.number_of_images):
@@ -313,6 +311,8 @@ class Sti:
                 self.sub_image_headers[sub_image_index].length = length
 
                 current_offset += length
+
+        self.header.size_after_compression = current_offset
 
     def normalize_animated_images(self):
         normalized_images = []

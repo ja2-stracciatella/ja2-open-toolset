@@ -220,7 +220,7 @@ class Sti:
             'raw'
         )
 
-    def _save_16bit_rgb_image(self):
+    def _16bit_rgb_image_to_bytes(self):
         w, h = self.header.width, self.header.height
         write_buffer = io.BytesIO()
         for y in range(h):
@@ -237,12 +237,23 @@ class Sti:
         number_of_palette_bytes = self.header.format_specific_header.number_of_palette_colors * 3
         self.palette = ImagePalette.raw("RGB", self.file.read(number_of_palette_bytes))
 
+    def _color_palette_to_bytes(self):
+        if self.palette.rawmode:
+            return self.palette.palette
+        return self.palette.tobytes()
+
     def _load_sub_image_headers(self):
         sub_header_size = struct.calcsize(StiSubImageHeader.format_in_file)
         self.sub_image_headers = []
         for i in range(self.header.format_specific_header.number_of_images):
             data = self.file.read(sub_header_size)
             self.sub_image_headers.append(StiSubImageHeader(data))
+
+    def _sub_image_headers_to_bytes(self):
+        write_buffer = io.BytesIO()
+        for header in self.sub_image_headers:
+            write_buffer.write(header.to_bytes())
+        return write_buffer.getvalue()
 
     def _load_aux_object_data(self):
         aux_object_size = struct.calcsize(StiSubImageHeader.format_in_file)
@@ -258,6 +269,12 @@ class Sti:
             data = self.file.read(aux_object_size)
             self.aux_object_data.append(AuxObjectData(data))
 
+    def _aux_object_data_to_bytes(self):
+        write_buffer = io.BytesIO()
+        for header in self.aux_object_data:
+            write_buffer.write(header.to_bytes())
+        return write_buffer.getvalue()
+
     def _load_8bit_indexed_image(self, sub_image_header):
         self.file.seek(self.start_of_image_data + sub_image_header.offset, os.SEEK_SET)
         compressed_data = self.file.read(sub_image_header.length)
@@ -272,6 +289,30 @@ class Sti:
         image.putpalette(self.palette)
 
         return image
+
+    def _8bit_indexed_image_to_bytes(self, image):
+        width = image.size[0]
+        height = image.size[1]
+        compressed_data = b''
+        uncompressed_data = image.tobytes()
+
+        for i in range(height):
+            compressed_data += ERTLE(uncompressed_data[i*width:(i+1)*width]).compress()
+        return compressed_data
+
+    def _update_offsets(self):
+        animation_lengths = list(map(len, self.images))
+        current_offset = 0
+        for i, anim in enumerate(self.images):
+            passed_images = sum(animation_lengths[:i])
+            for j, img in enumerate(anim):
+                sub_image_index = passed_images + j
+                length = len(self._8bit_indexed_image_to_bytes(img))
+
+                self.sub_image_headers[sub_image_index].offset = current_offset
+                self.sub_image_headers[sub_image_index].length = length
+
+                current_offset += length
 
     def normalize_animated_images(self):
         normalized_images = []
@@ -304,6 +345,16 @@ class Sti:
         self.images = normalized_images
 
     def save(self, to_file):
+        self._update_offsets()
         to_file.write(self.header.to_bytes())
         if self.header.mode == 'rgb':
-            to_file.write(self._save_16bit_rgb_image())
+            to_file.write(self._16bit_rgb_image_to_bytes())
+        else:
+            to_file.write(self._color_palette_to_bytes())
+            to_file.write(self._sub_image_headers_to_bytes())
+            for animation in self.images:
+                for image in animation:
+                    to_file.write(self._8bit_indexed_image_to_bytes(image))
+            if self.header.animated:
+                to_file.write(self._aux_object_data_to_bytes())
+

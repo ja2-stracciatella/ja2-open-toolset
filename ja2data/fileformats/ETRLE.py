@@ -18,12 +18,17 @@
 ##############################################################################
 
 import io
-import os
 import struct
 
 ALPHA_VALUE = 0
 IS_COMPRESSED_BYTE_MASK = 0x80
 NUMBER_OF_BYTES_MASK = 0x7F
+
+
+class EtrleException(Exception):
+    """Raised when an error in compression or decompression occurs"""
+    pass
+
 
 class ERTLE:
     def __init__(self, data):
@@ -48,6 +53,42 @@ class ERTLE:
                 extracted_buffer.write(struct.pack('<B', current_byte))
                 bytes_til_next_control_byte -= 1
 
-        extracted_buffer.seek(0, os.SEEK_SET)
+        if bytes_til_next_control_byte != 0:
+            raise EtrleException('Not enough data to decompress')
 
-        return extracted_buffer.read()
+        return extracted_buffer.getvalue()
+
+    def compress(self):
+        current = 0
+        current_lookahead = 0
+        length = 0
+        source_length = len(self.data)
+        compressed_buffer = io.BytesIO()
+
+        while current < source_length:
+            if self.data[current] == 0:
+                while current_lookahead < source_length and self.data[current_lookahead] == 0 and length < NUMBER_OF_BYTES_MASK:
+                    current_lookahead += 1
+                    length += 1
+                compressed_buffer.write(struct.pack('<B', length | IS_COMPRESSED_BYTE_MASK))
+            else:
+                while current_lookahead < source_length and self.data[current_lookahead] != 0 and length < NUMBER_OF_BYTES_MASK:
+                    current_lookahead += 1
+                    length += 1
+                compressed_buffer.write(struct.pack('<B', length))
+                compressed_buffer.write(struct.pack('<{}B'.format(length), *self.data[current:current+length]))
+
+            current += length
+            current_lookahead = current
+            length = 0
+
+        compressed_buffer.write(struct.pack('<B', 0))
+
+        return compressed_buffer.getvalue()
+
+
+
+
+
+
+

@@ -24,10 +24,9 @@ import os
 import sys
 import glob
 
-# TODO: Find out how to import properly...
 sys.path.append(os.getcwd())
 
-from fileformats import SlfFS, Sti
+from ja2py.fileformats import SlfFS, Sti
 from sti_to_png import write_png_from_sti
 
 def write_sequence_of_8bit_images_to_target_directory(sequence, target_directory):

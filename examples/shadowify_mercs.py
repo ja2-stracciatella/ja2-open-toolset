@@ -21,10 +21,9 @@ import os
 import re
 import sys
 
-# TODO: Find out how to import properly...
 sys.path.append(os.getcwd())
 
-from fileformats import BufferedSlfFS
+from ja2py.fileformats import BufferedSlfFS
 
 def main():
     parser = argparse.ArgumentParser(description='Shadowify your Faces.slf')

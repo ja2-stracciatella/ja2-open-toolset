@@ -25,7 +25,7 @@ import sys
 
 sys.path.append(os.getcwd())
 
-from fileformats.Sti import Sti, StiFileFormatException
+from ja2py.fileformats.Sti import Sti, StiFileFormatException
 
 def write_sequence_of_8bit_images_to_target_directory(sequence, target_directory):
     for image_index, image in enumerate(sequence):

@@ -23,10 +23,9 @@ import argparse
 import os
 import sys
 
-# TODO: Find out how to import properly...
 sys.path.append(os.getcwd())
 
-from fileformats import SlfFS
+from ja2py.fileformats import SlfFS
 from fs.osfs import OSFS
 from fs.mountfs import MountFS
 

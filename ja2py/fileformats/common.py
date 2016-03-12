@@ -25,7 +25,7 @@ def decode_ja2_string(string):
     return string.decode("ascii").replace("\x00", "")
 
 def encode_ja2_string(string, pad=None):
-    encoded = (string+'\x00').encode("ascii")
+    encoded = (string + '\x00').encode("ascii")
     if pad is not None:
         return encoded.ljust(pad, b'\x00')
     return encoded

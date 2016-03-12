@@ -21,3 +21,4 @@ from .SlfFS import SlfFS
 from .SlfFS import BufferedSlfFS
 from .Sti import Sti
 from .ETRLE import EtrleException, etrle_compress, etrle_decompress
+from .common import encode_ja2_string, decode_ja2_string

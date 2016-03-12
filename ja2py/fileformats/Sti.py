@@ -24,7 +24,7 @@ from operator import attrgetter
 from PIL import Image, ImagePalette
 
 from .common import decode_ja2_string, Ja2FileHeader, encode_ja2_string
-from .ETRLE import ETRLE
+from .ETRLE import etrle_compress, etrle_decompress
 
 # We expect that no normalized image is larger than the fullscreen size
 MAX_NORMALIZED_IMAGE_SIZE = 640 * 480
@@ -276,7 +276,7 @@ class Sti:
     def _load_8bit_indexed_image(self, sub_image_header):
         self.file.seek(self.start_of_image_data + sub_image_header.offset, os.SEEK_SET)
         compressed_data = self.file.read(sub_image_header.length)
-        uncompressed_data = ETRLE(compressed_data).decompress()
+        uncompressed_data = etrle_decompress(compressed_data)
 
         image = Image.frombytes(
             'P',
@@ -295,7 +295,7 @@ class Sti:
         uncompressed_data = image.tobytes()
 
         for i in range(height):
-            compressed_data += ETRLE(uncompressed_data[i*width:(i+1)*width]).compress()
+            compressed_data += etrle_compress(uncompressed_data[i*width:(i+1)*width]) + b'\x00'
         return compressed_data
 
     def _update_offsets(self):

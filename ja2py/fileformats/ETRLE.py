@@ -30,61 +30,51 @@ class EtrleException(Exception):
     pass
 
 
-class ETRLE:
-    def __init__(self, data):
-        self.data = data
+def etrle_decompress(data):
+    number_of_compressed_bytes = len(data)
+    compressed_bytes = struct.unpack('<{}B'.format(number_of_compressed_bytes), data)
+    extracted_buffer = io.BytesIO()
+    bytes_til_next_control_byte = 0
 
-    def decompress(self):
-        number_of_compressed_bytes = len(self.data)
-        compressed_bytes = struct.unpack('<{}B'.format(number_of_compressed_bytes), self.data)
-        extracted_buffer = io.BytesIO()
-        bytes_til_next_control_byte = 0
-
-        for current_byte in compressed_bytes:
-            if bytes_til_next_control_byte == 0:
-                is_compressed_alpha_byte = ((current_byte & IS_COMPRESSED_BYTE_MASK) >> 7) == 1
-                length_of_subsequence = current_byte & NUMBER_OF_BYTES_MASK
-                if is_compressed_alpha_byte:
-                    for s in range(length_of_subsequence):
-                        extracted_buffer.write(struct.pack('<B', ALPHA_VALUE))
-                else:
-                    bytes_til_next_control_byte = length_of_subsequence
+    for current_byte in compressed_bytes:
+        if bytes_til_next_control_byte == 0:
+            is_compressed_alpha_byte = ((current_byte & IS_COMPRESSED_BYTE_MASK) >> 7) == 1
+            length_of_subsequence = current_byte & NUMBER_OF_BYTES_MASK
+            if is_compressed_alpha_byte:
+                for s in range(length_of_subsequence):
+                    extracted_buffer.write(struct.pack('<B', ALPHA_VALUE))
             else:
-                extracted_buffer.write(struct.pack('<B', current_byte))
-                bytes_til_next_control_byte -= 1
+                bytes_til_next_control_byte = length_of_subsequence
+        else:
+            extracted_buffer.write(struct.pack('<B', current_byte))
+            bytes_til_next_control_byte -= 1
 
-        if bytes_til_next_control_byte != 0:
-            raise EtrleException('Not enough data to decompress')
+    if bytes_til_next_control_byte != 0:
+        raise EtrleException('Not enough data to decompress')
 
-        return extracted_buffer.getvalue()
+    return extracted_buffer.getvalue()
 
-    def compress(self):
-        current = 0
-        current_lookahead = 0
-        length = 0
-        source_length = len(self.data)
-        compressed_buffer = io.BytesIO()
+def etrle_compress(data):
+    current = 0
+    source_length = len(data)
+    compressed_buffer = io.BytesIO()
 
-        while current < source_length:
-            if self.data[current] == 0:
-                while current_lookahead < source_length and self.data[current_lookahead] == 0 and length < NUMBER_OF_BYTES_MASK:
-                    current_lookahead += 1
-                    length += 1
-                compressed_buffer.write(struct.pack('<B', length | IS_COMPRESSED_BYTE_MASK))
-            else:
-                while current_lookahead < source_length and self.data[current_lookahead] != 0 and length < NUMBER_OF_BYTES_MASK:
-                    current_lookahead += 1
-                    length += 1
-                compressed_buffer.write(struct.pack('<B', length))
-                compressed_buffer.write(struct.pack('<{}B'.format(length), *self.data[current:current+length]))
+    while current < source_length:
+        runtime_length = 0
 
-            current += length
-            current_lookahead = current
-            length = 0
+        if data[current] == 0:
+            while current + runtime_length < source_length and data[current + runtime_length] == 0 and runtime_length < NUMBER_OF_BYTES_MASK:
+                runtime_length += 1
+            compressed_buffer.write(struct.pack('<B', runtime_length | IS_COMPRESSED_BYTE_MASK))
+        else:
+            while current + runtime_length < source_length and data[current + runtime_length] != 0 and runtime_length < NUMBER_OF_BYTES_MASK:
+                runtime_length += 1
+            compressed_buffer.write(struct.pack('<B', runtime_length))
+            compressed_buffer.write(struct.pack('<{}B'.format(runtime_length), * data[current:current+runtime_length]))
 
-        compressed_buffer.write(struct.pack('<B', 0))
+        current += runtime_length
 
-        return compressed_buffer.getvalue()
+    return compressed_buffer.getvalue()
 
 
 

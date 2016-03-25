@@ -17,8 +17,7 @@
 #
 ##############################################################################
 
-from .SlfFS import SlfFS
-from .SlfFS import BufferedSlfFS
+from .SlfFS import SlfFS, BufferedSlfFS, SlfEntry, SlfHeader
 from .Sti import Sti
 from .ETRLE import EtrleException, etrle_compress, etrle_decompress
 from .common import encode_ja2_string, decode_ja2_string, Ja2FileHeader

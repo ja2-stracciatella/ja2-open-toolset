@@ -52,7 +52,7 @@ def main():
 
     if not args.output_file:
         output_file = os.path.join(os.path.dirname(slf_file),
-                                   os.path.splitext(os.path.basename(slf_file))[0] + 'Shawowified.slf')
+                                   os.path.splitext(os.path.basename(slf_file))[0] + 'Shadowified.slf')
     else:
         output_file = args.output_file
     output_file = os.path.expanduser(os.path.expandvars(output_file))
@@ -68,8 +68,8 @@ def main():
                 b.remove(f)
                 b.copy('/10.STI', f)
 
-
-    b.save(output_file)
+    with open(output_file, 'wb+') as f:
+        b.save(f)
 
 if __name__ == "__main__":
     main()

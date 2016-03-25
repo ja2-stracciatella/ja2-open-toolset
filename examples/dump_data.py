@@ -63,7 +63,7 @@ def dump_sti(output_folder, file_path, slf_fs, args):
 
 def dump_directory(output_folder, slf_fs, directory, args):
     special_file_handlers = {
-        '.sti': dump_sti
+        # '.sti': dump_sti
     }
 
     for file in slf_fs.listdir(directory, files_only=True):

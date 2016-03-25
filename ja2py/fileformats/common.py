@@ -17,12 +17,13 @@
 #
 ##############################################################################
 
-from functools import partial
+from collections import OrderedDict
 import struct
 
 
 def decode_ja2_string(string):
     return string.decode("ascii").replace("\x00", "")
+
 
 def encode_ja2_string(string, pad=None):
     encoded = (string + '\x00').encode("ascii")
@@ -30,39 +31,59 @@ def encode_ja2_string(string, pad=None):
         return encoded.ljust(pad, b'\x00')
     return encoded
 
+
 class Ja2FileHeader(object):
-    format_in_file = ''
-    field_names = []
-    default_data = []
-    flags = None
+    fields = []
+    flags = {}
 
-    def __init__(self, data=None):
-        if data:
-            raw_data = dict(zip(self.field_names, struct.unpack(self.format_in_file, data)))
-            attributes = self.get_attributes_from_data(raw_data)
+    def __init__(self, **kwargs):
+        self.field_values = dict()
+        for key, value in kwargs.items():
+            self[key] = value
+
+    def __setitem__(self, key, value):
+        if key not in self.keys() or key is None:
+            raise KeyError()
+        self.field_values[key] = value
+
+    def __getitem__(self, key):
+        return self.field_values[key]
+
+    def __bytes__(self):
+        raw_values = self.map_attrs_to_raw(self.field_values)
+        ordered_raw_values = list(map(lambda k: raw_values[k], self.keys()))
+        return struct.pack(self._get_struct_format(), *ordered_raw_values)
+
+    def get_flag(self, attr, flag_name):
+        return (self[attr] >> self.flags[attr][flag_name]) & 1 == 1
+
+    def set_flag(self, attr, flag_name, value):
+        if value:
+            self[attr] |= 1 << self.flags[attr][flag_name]
         else:
-            attributes = dict(zip(self.field_names, self.default_data))
+            self[attr] &= ~(1 << self.flags[attr][flag_name])
 
-        for key in attributes:
-            setattr(self, key, attributes[key])
+    @staticmethod
+    def map_raw_to_attrs(data):
+        return data
 
-    def get_attributes_from_data(self, data_dict):
-        return data_dict
+    @staticmethod
+    def map_attrs_to_raw(attrs):
+        return attrs
 
-    def get_data_from_attributes(self, attribute_dict):
-        return attribute_dict
+    @classmethod
+    def keys(cls):
+        return list([f[0] for f in cls.fields if f[0] is not None])
 
-    def to_bytes(self):
-        attributes = dict(zip(self.field_names, map(partial(getattr, self), self.field_names)))
-        raw_data = self.get_data_from_attributes(attributes)
-        return struct.pack(self.format_in_file, *list(map(raw_data.get, self.field_names)))
+    @classmethod
+    def _get_struct_format(cls):
+        return '<' + str.join('', map(lambda f: f[1], cls.fields))
 
-    def get_flag(self, flag_name):
-        if self.flags is None:
-            raise Exception('{}: No flags set')
-        if flag_name not in self.flag_bits:
-            raise Exception('{}: Unknown Flag: "{}"', self.__class__.__name__, flag_name)
-        return (self.flags >> self.flag_bits[flag_name]) & 1 == 1
+    @classmethod
+    def get_size(cls):
+        return struct.calcsize(cls._get_struct_format())
 
-    def __str__(self):
-        return '<{}: {}>'.format(self.__class__.__name__, dict(zip(self.field_names, map(lambda f: getattr(self, f), self.field_names))))
+    @classmethod
+    def from_bytes(cls, byte_str):
+        kwargs = cls.map_raw_to_attrs(dict(zip(cls.keys(), struct.unpack(cls._get_struct_format(), byte_str))))
+        return cls(**kwargs)

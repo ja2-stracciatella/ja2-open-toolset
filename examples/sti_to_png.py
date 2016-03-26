@@ -25,38 +25,28 @@ import sys
 
 sys.path.append(os.getcwd())
 
-from ja2py.fileformats.Sti import Sti, StiFileFormatException
+from ja2py.fileformats.Sti import load_8bit_sti, load_16bit_sti, is_8bit_sti, is_16bit_sti
 
 def write_sequence_of_8bit_images_to_target_directory(sequence, target_directory):
     for image_index, image in enumerate(sequence):
         image_file = os.path.join(target_directory, '{}.png'.format(image_index))
-        image.save(image_file, transparency=0)
+        image.image.save(image_file, transparency=0)
 
-def write_png_from_sti(output_file, sti, normalize):
-    if sti.header.mode != 'indexed':
-        sti.images[0][0].save(output_file)
+
+def write_24bit_png_from_sti(output_file, sti):
+    return sti.image.save(output_file)
+
+
+def write_8bit_png_from_sti(output_file, sti, normalize):
+    if len(sti.images) > 1:
+        base_dir = os.path.splitext(output_file)[0]
+        if not os.path.exists(base_dir):
+            os.makedirs(base_dir)
+
+        write_sequence_of_8bit_images_to_target_directory(sti.images, base_dir)
     else:
-        if sti.header.format_specific_header.number_of_images > 1:
-            base_dir = os.path.splitext(output_file)[0] + '.PNG'
-            if not os.path.exists(base_dir):
-                os.makedirs(base_dir)
+        sti.images[0].image.save(output_file, transparency=0)
 
-            if sti.header.animated and normalize:
-                try:
-                    sti.normalize_animated_images()
-                except StiFileFormatException as e:
-                    print("Warning: {} not normalized because of error: {}".format(base_dir, str(e)))
-
-            if len(sti.images) == 1:
-                write_sequence_of_8bit_images_to_target_directory(sti.images[0], base_dir)
-            else:
-                for animation_index, animation in enumerate(sti.images):
-                    animation_target_dir = os.path.join(base_dir, str(animation_index))
-                    if not os.path.exists(animation_target_dir):
-                        os.mkdir(animation_target_dir)
-                    write_sequence_of_8bit_images_to_target_directory(animation, animation_target_dir)
-        else:
-            sti.images[0][0].save(output_file, transparency=0)
 
 def main():
     parser = argparse.ArgumentParser(description='STI to PNG Converter')
@@ -87,7 +77,8 @@ def main():
     sti_file = os.path.expanduser(os.path.expandvars(sti_file))
     sti_file = os.path.normpath(os.path.abspath(sti_file))
 
-    if not args.output_file:
+    output_file = args.output_file
+    if output_file:
         output_file = os.path.join(os.path.dirname(sti_file),
                                    os.path.splitext(os.path.basename(sti_file))[0] + '.png')
     output_file = os.path.expanduser(os.path.expandvars(output_file))
@@ -98,25 +89,27 @@ def main():
         print("Output file: {}".format(output_file))
 
     with open(sti_file, 'rb') as file:
-        sti = Sti(file)
-
-        if args.verbose:
-            print("File Details: ")
-            print("Data Type: {} {}bit".format(sti.header.mode, sti.header.color_depth))
-            print("Animated: {}".format(sti.header.animated))
-            if sti.header.mode == 'indexed':
-                print("ETRLE compression used: {}".format(sti.header.get_flag('ETRLE')))
-                print("Number of single images: {}".format(sti.header.format_specific_header.number_of_images))
-                for i, sub_image_header in enumerate(sti.sub_image_headers):
+        if is_8bit_sti(file):
+            sti = load_8bit_sti(file)
+            if args.verbose:
+                print("File Details: ")
+                print("Data Type: indexed 8bit")
+                print("Number of single images: {}".format(len(sti)))
+                for i, sub_image in enumerate(sti.images):
                     print("Subimage {}: Size {}x{}, Shift +{}+{}".format(
                         i+1,
-                        sub_image_header.width,
-                        sub_image_header.height,
-                        sub_image_header.offset_x,
-                        sub_image_header.offset_y
+                        sub_image.width,
+                        sub_image.height,
+                        sub_image.offset_x,
+                        sub_image.offset_y
                     ))
-
-        write_png_from_sti(output_file, sti, args.normalize)
+            write_8bit_png_from_sti(output_file, sti, args.normalize)
+        if is_16bit_sti(file):
+            sti = load_16bit_sti(file)
+            if args.verbose:
+                print("File Details: ")
+                print("Data Type: RGB 16bit")
+                write_24bit_png_from_sti(output_file, sti)
 
         print("Done")
 

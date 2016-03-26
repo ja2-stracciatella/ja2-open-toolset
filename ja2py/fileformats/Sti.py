@@ -20,341 +20,202 @@
 import os
 import io
 import struct
-from operator import attrgetter
 from PIL import Image, ImagePalette
 
-from .common import decode_ja2_string, Ja2FileHeader, encode_ja2_string
-from .ETRLE import etrle_compress, etrle_decompress
-
-# We expect that no normalized image is larger than the fullscreen size
-MAX_NORMALIZED_IMAGE_SIZE = 640 * 480
-
-class StiFileFormatException(Exception):
-    """Raised when a STI file is incorrectly formatted"""
-    pass
-
-
-class StiHeader(Ja2FileHeader):
-    format_in_file = '<4sLLLLHH20sB3sL12s'
-    field_names = [
-        'file_identifier',
-        'initial_size',
-        'size_after_compression',
-        'transparent_color',
-        'flags',
-        'height',
-        'width',
-        'format_specific_header',
-        'color_depth',
-        'unused',
-        'aux_data_size',
-        'unused2'
-    ]
-    default_values = [
-        'STCI',
-        0,
-        0,
-        0,
-        40,
-        0,
-        0,
-        None,
-        8,
-        '123',
-        0,
-        '123456789012'
-    ]
-
-    flag_bits = {
-        'RGB': 2,
-        'INDEXED': 3,
-        'ZLIB': 4,
-        'ETRLE': 5
-    }
-
-    def __init__(self, data):
-        super(StiHeader, self).__init__(data)
-        aux_object_data_size = struct.calcsize(AuxObjectData.format_in_file)
-
-        if self.file_identifier != 'STCI':
-            raise StiFileFormatException('Not a STI File')
-        if self.get_flag('RGB') and self.get_flag('INDEXED'):
-            raise StiFileFormatException('Both RGB and Indexed flags are set')
-        if self.get_flag('ZLIB'):
-            raise StiFileFormatException('Zlib compression not supported')
-        if self.get_flag('RGB') and self.color_depth != 16:
-            raise StiFileFormatException('Indexed format specified, but color depth is {} bytes'.format(self.color_depth))
-        if self.get_flag('INDEXED') and self.color_depth != 8:
-            raise StiFileFormatException('RGB format specified, but color depth is {} bytes'.format(self.color_depth))
-
-        if self.get_flag('RGB'):
-            self.mode = 'rgb'
-            self.format_specific_header = Sti16BitHeader(self.format_specific_header)
-            self.animated = False
-        else:
-            self.mode = 'indexed'
-            self.format_specific_header = Sti8BitHeader(self.format_specific_header)
-            self.animated = self.aux_data_size != 0
-            expected_aux_data_size = self.format_specific_header.number_of_images * aux_object_data_size
-            if self.animated and self.aux_data_size != expected_aux_data_size:
-                raise(StiFileFormatException("Application Data expected to be {} was {}".format(
-                    self.format_specific_header.number_of_images * struct.calcsize(AuxObjectData.format_in_file),
-                    self.aux_data_size
-                )))
-
-    def get_attributes_from_data(self, data_dict):
-        data_dict['file_identifier'] = decode_ja2_string(data_dict["file_identifier"])
-        return data_dict
-
-    def get_data_from_attributes(self, attributes_dict):
-        attributes_dict['file_identifier'] = encode_ja2_string(attributes_dict["file_identifier"], pad=4)
-        attributes_dict['format_specific_header'] = self.format_specific_header.to_bytes()
-        return attributes_dict
+from .common import Ja2FileHeader
+from ..content import Image16Bit, Images8Bit, SubImage8Bit
+from .ETRLE import etrle_decompress
 
 
 class Sti16BitHeader(Ja2FileHeader):
-    format_in_file = '<LLLLBBBB'
-    field_names = [
-        'red_color_mask',
-        'green_color_mask',
-        'blue_color_mask',
-        'alpha_channel_mask',
-        'red_color_depth',
-        'green_color_depth',
-        'blue_color_depth',
-        'alpha_channel_depth',
+    fields = [
+        ('red_color_mask', 'L'),
+        ('green_color_mask', 'L'),
+        ('blue_color_mask', 'L'),
+        ('alpha_channel_mask', 'L'),
+        ('red_color_depth', 'B'),
+        ('green_color_depth', 'B'),
+        ('blue_color_depth', 'B'),
+        ('alpha_channel_depth', 'B')
     ]
 
 
 class Sti8BitHeader(Ja2FileHeader):
-    format_in_file = '<LHBBB11s'
-    field_names = [
-        'number_of_palette_colors',
-        'number_of_images',
-        'red_color_depth',
-        'green_color_depth',
-        'blue_color_depth',
-        'unused'
+    fields = [
+        ('number_of_palette_colors', 'L'),
+        ('number_of_images', 'H'),
+        ('red_color_depth', 'B'),
+        ('green_color_depth', 'B'),
+        ('blue_color_depth', 'B'),
+        (None, '11x')
     ]
 
 
+class StiHeader(Ja2FileHeader):
+    fields = [
+        ('file_identifier', '4s'),
+        ('initial_size', 'L'),
+        ('size_after_compression', 'L'),
+        ('transparent_color', 'L'),
+        ('flags', 'L'),
+        ('height', 'H'),
+        ('width', 'H'),
+        ('format_specific_header', '20s'),
+        ('color_depth', 'B'),
+        (None, '3x'),
+        ('aux_data_size', 'L'),
+        (None, '12x')
+    ]
+
+    flags = {
+        'flags': {
+            'RGB': 2,
+            'INDEXED': 3,
+            'ZLIB': 4,
+            'ETRLE': 5
+        }
+    }
+
+
 class StiSubImageHeader(Ja2FileHeader):
-    format_in_file = '<LLHHHH'
-    field_names = [
-        'offset',
-        'length',
-        'offset_x',
-        'offset_y',
-        'height',
-        'width'
+    fields = [
+        ('offset', 'L'),
+        ('length', 'L'),
+        ('offset_x', 'H'),
+        ('offset_y', 'H'),
+        ('height', 'H'),
+        ('width', 'H')
     ]
 
 
 class AuxObjectData(Ja2FileHeader):
-    format_in_file = '<BBH3sBBB6s'
-    field_names = [
-        'wall_orientation',
-        'number_of_tiles',
-        'tile_location_index',
-        'unused',
-        'current_frame',
-        'number_of_frames',
-        'flags',
-        'unused'
+    fields = [
+        ('wall_orientation', 'B'),
+        ('number_of_tiles', 'B'),
+        ('tile_location_index', 'H'),
+        (None, '3x'),
+        ('current_frame', 'B'),
+        ('number_of_frames', 'B'),
+        ('flags', 'B'),
+        (None, '6x')
     ]
 
 
-class Sti:
-    def __init__(self, sti_filename):
-        header_size = struct.calcsize(StiHeader.format_in_file)
+def _get_filelike(file):
+    if isinstance(file, str):
+        filename = os.path.expanduser(os.path.expandvars(file))
+        filename = os.path.normpath(os.path.abspath(filename))
+        return open(filename, 'rb')
+    else:
+        return file
 
-        if isinstance(sti_filename, str):
-            sti_filename = os.path.expanduser(os.path.expandvars(sti_filename))
-            sti_filename = os.path.normpath(os.path.abspath(sti_filename))
-            self.file = open(sti_filename, 'rb')
-        else:
-            self.file = sti_filename
 
-        self.header = StiHeader(self.file.read(header_size))
+def is_16bit_sti(file):
+    f = _get_filelike(file)
+    header = StiHeader.from_bytes(f.read(StiHeader.get_size()))
+    f.seek(0, 0)
+    if header['file_identifier'] != b'STCI':
+        return False
+    return header.get_flag('flags', 'RGB') and not header.get_flag('flags', 'INDEXED')
 
-        if self.header.mode == 'rgb':
-            self.images = [[self._load_16bit_rgb_image()]]
-        else:
-            self._load_color_palette()
-            self._load_sub_image_headers()
-            self.start_of_image_data = self.file.tell()
-            if not self.header.animated:
-                self.images = [
-                    [
-                        self._load_8bit_indexed_image(s) for s in self.sub_image_headers
-                    ]
-                ]
-            else:
-                self._load_aux_object_data()
 
-                self.images = []
-                for sub_image_header, aux_object_data in zip(self.sub_image_headers, self.aux_object_data):
-                    if aux_object_data.number_of_frames != 0 or len(self.images) == 0:
-                        self.images.append([])
-                    self.images[-1].append(self._load_8bit_indexed_image(sub_image_header))
+def is_8bit_sti(file):
+    f = _get_filelike(file)
+    header = StiHeader.from_bytes(f.read(StiHeader.get_size()))
+    f.seek(0, 0)
+    if header['file_identifier'] != b'STCI':
+        return False
+    return header.get_flag('flags', 'INDEXED') and not header.get_flag('flags', 'RGB')
 
-    def _load_16bit_rgb_image(self):
-        number_of_pixels = self.header.width * self.header.height
-        red_color_mask = self.header.format_specific_header.red_color_mask
-        green_color_mask = self.header.format_specific_header.green_color_mask
-        blue_color_mask = self.header.format_specific_header.blue_color_mask
-        pixel_bytes = struct.unpack('<{}H'.format(number_of_pixels), self.file.read(number_of_pixels * 2))
-        rgb_image_buffer = io.BytesIO()
 
-        for pixel_short in pixel_bytes:
-            r = (pixel_short & red_color_mask) >> 8
-            g = (pixel_short & green_color_mask) >> 3
-            b = (pixel_short & blue_color_mask) << 3
-            rgb_image_buffer.write(struct.pack('BBB', r, g, b))
-        rgb_image_buffer.seek(0, os.SEEK_SET)
+def load_16bit_sti(file):
+    if not is_16bit_sti(file):
+        raise ValueError('Not a 16bit sti file')
+    f = _get_filelike(file)
 
-        return Image.frombytes(
-            'RGB',
-            (self.header.width, self.header.height),
-            rgb_image_buffer.read(),
-            'raw'
-        )
+    header = StiHeader.from_bytes(f.read(StiHeader.get_size()))
+    header_16bit = Sti16BitHeader.from_bytes(header['format_specific_header'])
 
-    def _16bit_rgb_image_to_bytes(self):
-        w, h = self.header.width, self.header.height
-        write_buffer = io.BytesIO()
-        for y in range(h):
-            for x in range(w):
-                pix = self.images[0][0].getpixel((x, y))
-                r = pix[0] >> 3
-                g = pix[1] >> 3
-                b = pix[2] >> 3
-                rgb = b + (g << 6) + (r << 11)
-                write_buffer.write(struct.pack('<H', rgb))
-        return write_buffer.getvalue()
+    number_of_pixels = header['width'] * header['height']
+    red_color_mask = header_16bit['red_color_mask']
+    green_color_mask = header_16bit['green_color_mask']
+    blue_color_mask = header_16bit['blue_color_mask']
+    pixel_bytes = struct.unpack('<{}H'.format(number_of_pixels), f.read(number_of_pixels * 2))
 
-    def _load_color_palette(self):
-        number_of_palette_bytes = self.header.format_specific_header.number_of_palette_colors * 3
-        self.palette = ImagePalette.raw("RGB", self.file.read(number_of_palette_bytes))
+    rgb_image_buffer = io.BytesIO()
+    for pixel_short in pixel_bytes:
+        r = (pixel_short & red_color_mask) >> 8
+        g = (pixel_short & green_color_mask) >> 3
+        b = (pixel_short & blue_color_mask) << 3
+        rgb_image_buffer.write(struct.pack('BBB', r, g, b))
+    rgb_image_buffer.seek(0, os.SEEK_SET)
 
-    def _color_palette_to_bytes(self):
-        if self.palette.rawmode:
-            return self.palette.palette
-        return self.palette.tobytes()
+    img = Image.frombytes(
+        'RGB',
+        (header['width'], header['height']),
+        rgb_image_buffer.read(),
+        'raw'
+    )
 
-    def _load_sub_image_headers(self):
-        sub_header_size = struct.calcsize(StiSubImageHeader.format_in_file)
-        self.sub_image_headers = []
-        for i in range(self.header.format_specific_header.number_of_images):
-            data = self.file.read(sub_header_size)
-            self.sub_image_headers.append(StiSubImageHeader(data))
+    return Image16Bit(img)
 
-    def _sub_image_headers_to_bytes(self):
-        write_buffer = io.BytesIO()
-        for header in self.sub_image_headers:
-            write_buffer.write(header.to_bytes())
-        return write_buffer.getvalue()
 
-    def _load_aux_object_data(self):
-        aux_object_size = struct.calcsize(StiSubImageHeader.format_in_file)
+def _load_raw_sub_image(f, palette, sub_image_header):
+    compressed_data = f.read(sub_image_header['length'])
+    uncompressed_data = etrle_decompress(compressed_data)
 
-        self.file.seek(
-            self.start_of_image_data +
-            self.header.size_after_compression, os.SEEK_SET)
+    img = Image.frombytes(
+        'P',
+        (sub_image_header['width'], sub_image_header['height']),
+        uncompressed_data,
+        'raw'
+    )
+    img.putpalette(palette)
 
-        self.aux_object_data = []
-        for i in range(self.header.format_specific_header.number_of_images):
-            data = self.file.read(aux_object_size)
-            self.aux_object_data.append(AuxObjectData(data))
+    return img
 
-    def _aux_object_data_to_bytes(self):
-        write_buffer = io.BytesIO()
-        for header in self.aux_object_data:
-            write_buffer.write(header.to_bytes())
-        return write_buffer.getvalue()
 
-    def _load_8bit_indexed_image(self, sub_image_header):
-        self.file.seek(self.start_of_image_data + sub_image_header.offset, os.SEEK_SET)
-        compressed_data = self.file.read(sub_image_header.length)
-        uncompressed_data = etrle_decompress(compressed_data)
+def _to_sub_image(image, sub_image_header, aux_image_data):
+    sub = SubImage8Bit(image)
 
-        image = Image.frombytes(
-            'P',
-            (sub_image_header.width, sub_image_header.height),
-            uncompressed_data,
-            'raw'
-        )
-        image.putpalette(self.palette)
+    sub.offsets = (sub_image_header['offset_x'], sub_image_header['offset_y'])
 
-        return image
+    if aux_image_data:
+        sub.aux_data = {
+            'wall_orientation': aux_image_data['wall_orientation'],
+            'number_of_tiles': aux_image_data['number_of_tiles'],
+            'tile_location_index': aux_image_data['tile_location_index'],
+            'current_frame': aux_image_data['current_frame'],
+            'number_of_frames': aux_image_data['number_of_frames'],
+        }
 
-    def _8bit_indexed_image_to_bytes(self, image):
-        width = image.size[0]
-        height = image.size[1]
-        compressed_data = b''
-        uncompressed_data = image.tobytes()
+    return sub
 
-        for i in range(height):
-            compressed_data += etrle_compress(uncompressed_data[i*width:(i+1)*width]) + b'\x00'
-        return compressed_data
 
-    def _update_offsets(self):
-        animation_lengths = list(map(len, self.images))
-        current_offset = 0
-        for i, anim in enumerate(self.images):
-            passed_images = sum(animation_lengths[:i])
-            for j, img in enumerate(anim):
-                sub_image_index = passed_images + j
-                length = len(self._8bit_indexed_image_to_bytes(img))
+def load_8bit_sti(file):
+    if not is_8bit_sti(file):
+        raise ValueError('Not a non-animated 8bit sti file')
+    f = _get_filelike(file)
 
-                self.sub_image_headers[sub_image_index].offset = current_offset
-                self.sub_image_headers[sub_image_index].length = length
+    header = StiHeader.from_bytes(f.read(StiHeader.get_size()))
+    header_8bit = Sti8BitHeader.from_bytes(header['format_specific_header'])
 
-                current_offset += length
+    palette_colors = [struct.unpack('BBB', f.read(3)) for _ in range(header_8bit['number_of_palette_colors'])]
+    colors_in_right_order = [x[0] for x in palette_colors] + [x[1] for x in palette_colors] + [x[2] for x in palette_colors]
+    palette = ImagePalette.ImagePalette("RGB", colors_in_right_order, 3 * header_8bit['number_of_palette_colors'])
 
-        self.header.size_after_compression = current_offset
+    sub_image_headers = [StiSubImageHeader.from_bytes(f.read(StiSubImageHeader.get_size()))
+                         for _ in range(header_8bit['number_of_images'])]
+    images = [_load_raw_sub_image(f, palette, s) for s in sub_image_headers]
 
-    def normalize_animated_images(self):
-        normalized_images = []
-        animation_start_index = 0
-        for animation in self.images:
-            headers = self.sub_image_headers[animation_start_index:animation_start_index+len(animation)]
+    aux_image_data = [None] * len(images)
+    if header['aux_data_size'] != 0:
+        aux_image_data = [AuxObjectData.from_bytes(f.read(AuxObjectData.get_size()))
+                          for _ in range(header_8bit['number_of_images'])]
 
-            min_offset_x = min([a.offset_x for a in headers])
-            min_offset_y = min([a.offset_y for a in headers])
-            normalized_offsets_x = [a.offset_x-min_offset_x for a in headers]
-            normalized_offsets_y = [a.offset_y-min_offset_y for a in headers]
-            max_width = max([o+a.width for o, a in zip(normalized_offsets_x, headers)])
-            max_height = max([o+a.height for o, a in zip(normalized_offsets_y, headers)])
+    return Images8Bit(
+        list([_to_sub_image(i, s, a) for i, s, a in zip(images, sub_image_headers, aux_image_data)]),
+        palette
+    )
 
-            if max_width * max_height > MAX_NORMALIZED_IMAGE_SIZE:
-                raise StiFileFormatException(
-                    'The offsets are set in such a way that the image size exceeds full-screen.'
-                )
-
-            normalized_animation = []
-            for i, image in enumerate(animation):
-                normalized_image = Image.new('P', (max_width, max_height), 0)
-                normalized_image.putpalette(self.palette)
-                normalized_image.paste(image, (normalized_offsets_x[i], normalized_offsets_y[i]))
-                normalized_animation.append(normalized_image)
-
-            normalized_images.append(normalized_animation)
-            animation_start_index += len(headers)
-
-        self.images = normalized_images
-
-    def save(self, to_file):
-        self._update_offsets()
-        to_file.write(self.header.to_bytes())
-        if self.header.mode == 'rgb':
-            to_file.write(self._16bit_rgb_image_to_bytes())
-        else:
-            to_file.write(self._color_palette_to_bytes())
-            to_file.write(self._sub_image_headers_to_bytes())
-            for animation in self.images:
-                for image in animation:
-                    to_file.write(self._8bit_indexed_image_to_bytes(image))
-            if self.header.animated:
-                to_file.write(self._aux_object_data_to_bytes())
 

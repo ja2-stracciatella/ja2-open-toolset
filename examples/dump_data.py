@@ -26,13 +26,13 @@ import glob
 
 sys.path.append(os.getcwd())
 
-from ja2py.fileformats import SlfFS, Sti
-from sti_to_png import write_png_from_sti
+from ja2py.fileformats import SlfFS, Sti, is_8bit_sti, is_16bit_sti, load_8bit_sti, load_16bit_sti
+from sti_to_png import write_8bit_png_from_sti, write_24bit_png_from_sti
 
 def write_sequence_of_8bit_images_to_target_directory(sequence, target_directory):
-    for image_index, image in enumerate(sequence):
+    for image_index, sub_image in enumerate(sequence):
         image_file = os.path.join(target_directory, '{}.png'.format(image_index))
-        image.save(image_file, transparency=0)
+        sub_image.image.save(image_file, transparency=0)
 
 
 def dump_file(output_folder, file_path, slf_fs, args):
@@ -55,15 +55,19 @@ def dump_sti(output_folder, file_path, slf_fs, args):
         print("Dumping PNGs from STI file: {}".format(file_path))
 
     with slf_fs.open(file_path, 'rb') as file:
-        sti = Sti(file)
         if not os.path.exists(to_dir):
             os.makedirs(to_dir)
-        write_png_from_sti(to_path, sti, args.normalize)
+        if is_8bit_sti(file):
+            sti = load_8bit_sti(file)
+            write_8bit_png_from_sti(to_path, sti, args.normalize)
+        elif is_16bit_sti(file):
+            sti = load_16bit_sti(file)
+            write_24bit_png_from_sti(to_path, sti)
 
 
 def dump_directory(output_folder, slf_fs, directory, args):
     special_file_handlers = {
-        # '.sti': dump_sti
+        '.sti': dump_sti
     }
 
     for file in slf_fs.listdir(directory, files_only=True):

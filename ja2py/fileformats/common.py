@@ -17,7 +17,6 @@
 #
 ##############################################################################
 
-from collections import OrderedDict
 import struct
 
 

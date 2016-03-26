@@ -17,8 +17,4 @@
 #
 ##############################################################################
 
-from .SlfFS import SlfFS, BufferedSlfFS, SlfEntry, SlfHeader
-from .Sti import Sti16BitHeader, Sti8BitHeader, StiHeader, StiSubImageHeader, AuxObjectData,\
-                 is_16bit_sti, is_8bit_sti, load_16bit_sti, load_8bit_sti
-from .ETRLE import EtrleException, etrle_compress, etrle_decompress
-from .common import encode_ja2_string, decode_ja2_string, Ja2FileHeader
+from .Image import Image16Bit, Images8Bit, SubImage8Bit

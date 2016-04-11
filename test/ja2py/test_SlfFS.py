@@ -1,8 +1,7 @@
 import unittest
 
 from io import BytesIO
-from datetime import datetime
-from time import mktime
+from time import strptime
 from fs.errors import CreateFailedError, UnsupportedError, ResourceNotFoundError, ResourceInvalidError
 from ja2py.fileformats import SlfEntry, SlfHeader, SlfFS, BufferedSlfFS
 
@@ -15,7 +14,7 @@ class TestSlfFSEntry(unittest.TestCase):
                       b'\x00\x00\x00' + b'\x00\xa2\xe3\x18\xbc\x86\xd1\x01' + b'\x00\x00\x00\x00')
 
         header = SlfEntry.from_bytes(test_bytes)
-        expected_time = datetime.strptime('20160325T183100UTC', "%Y%m%dT%H%M%S%Z")
+        expected_time = strptime('20160325T173100UTC', "%Y%m%dT%H%M%S%Z")
 
         self.assertEqual(header['file_name'], '1234567890')
         self.assertEqual(header['offset'], 1)
@@ -24,15 +23,15 @@ class TestSlfFSEntry(unittest.TestCase):
         self.assertEqual(header['time'], expected_time)
 
     def test_write_to_bytes(self):
-        time = datetime.strptime('19900101T010000UTC', "%Y%m%dT%H%M%S%Z")
+        time = strptime('19900101T010000UTC', "%Y%m%dT%H%M%S%Z")
         header = SlfEntry(file_name='TestPadded', offset=4, length=3, state=2, time=time)
         expected = (b'TestPadded' + (246 * b'\x00') + b'\x04\x00\x00\x00' + b'\x03\x00\x00\x00' + b'\x02' +
-                    b'\x00\x00\x00' + b'\x00@\xd6\x18*\x1e\xb4\x01' + b'\x00\x00\x00\x00')
+                    b'\x00\x00\x00' + b'\x00\xa8\x9az2\x1e\xb4\x01' + b'\x00\x00\x00\x00')
 
         self.assertEqual(bytes(header), expected)
 
     def test_idempotency(self):
-        time = datetime.strptime('20200325T183100UTC', "%Y%m%dT%H%M%S%Z")
+        time = strptime('20200325T183100UTC', "%Y%m%dT%H%M%S%Z")
         header = SlfEntry(file_name='Some Filename', offset=123581, length=4567, state=125, time=time)
 
         regenerated_header = SlfEntry.from_bytes(bytes(header))
@@ -100,7 +99,7 @@ class TestSlfFSHeader(unittest.TestCase):
 
 
 def create_test_slf_fs():
-    time = datetime.strptime('19900101T010000UTC', "%Y%m%dT%H%M%S%Z")
+    time = strptime('19900101T010000UTC', "%Y%m%dT%H%M%S%Z")
     header = SlfHeader(
         library_name='SomeFile',
         library_path='SomePath',
@@ -158,7 +157,7 @@ class TestSlfFS(unittest.TestCase):
         self.assertEqual(set(slf_file.listdir('/spam/ham')), {'parrot.txt'})
 
     def test_file_info(self):
-        time = datetime.strptime('19900101T010000UTC', "%Y%m%dT%H%M%S%Z")
+        time = strptime('19900101T010000UTC', "%Y%m%dT%H%M%S%Z")
         slf_file = SlfFS(create_test_slf_fs())
 
         self.assertEqual(slf_file.getinfo('/foo'), {'size': 0})
@@ -242,15 +241,15 @@ class TestBufferedSlfFS(unittest.TestCase):
         self.assertFalse(slf_file.exists('/spam'))
 
     def test_writing_to_disk_works(self):
-        time = datetime.strptime('20160325T183100UTC', "%Y%m%dT%H%M%S%Z")
+        time = strptime('20160325T183100UTC', "%Y%m%dT%H%M%S%Z")
         slf_file = BufferedSlfFS(create_test_slf_fs())
         expected_bytes = (b'SomeFile' + (248 * b'\x00') + b'SomePath' + (248 * b'\x00') + b'\x02\x00\x00\x00' +
                           b'\x02\x00\x00\x00' + b'\x01\x00' + b'\x01\x00' + b'\x01\x00\x00\x00' + b'\x00\x00\x00\x00' +
                           b'Fourth' + b'WrittenInMemory' +
                           b'carrot' + (250 * b'\x00') + b'\x14\x02\x00\x00' + b'\x06\x00\x00\x00' + b'\x00' +
-                          b'\x00\x00\x00' + b'\x00@\xd6\x18*\x1e\xb4\x01' + b'\x00\x00\x00\x00' +
+                          b'\x00\x00\x00' + b'\x00\xa8\x9az2\x1e\xb4\x01' + b'\x00\x00\x00\x00' +
                           b'test\\a' + (250 * b'\x00') + b'\x1A\x02\x00\x00' + b'\x0F\x00\x00\x00' + b'\x00' +
-                          b'\x00\x00\x00' + b'\x00\xa2\xe3\x18\xbc\x86\xd1\x01' + b'\x00\x00\x00\x00'
+                          b'\x00\x00\x00' + b'\x00\n\xa8z\xc4\x86\xd1\x01' + b'\x00\x00\x00\x00'
                          )
 
         slf_file.remove('/foo/bar.baz')

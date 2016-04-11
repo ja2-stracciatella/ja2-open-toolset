@@ -20,8 +20,8 @@
 import os
 import struct
 import io
-from time import mktime
-from datetime import datetime
+from time import gmtime
+from calendar import timegm
 from fs.base import FS
 from fs.errors import CreateFailedError, UnsupportedError, ResourceNotFoundError, ResourceInvalidError
 from fs.memoryfs import MemoryFS
@@ -51,14 +51,14 @@ class SlfEntry(Ja2FileHeader):
     def map_raw_to_attrs(raw):
         attrs = raw.copy()
         attrs['file_name'] = decode_ja2_string(raw['file_name'])
-        attrs['time'] = datetime.fromtimestamp(float(raw['time']) / 10000000.0 - 11644473600.0)
+        attrs['time'] = gmtime(float(raw['time']) / 10000000.0 - 11644473600.0)
         return attrs
 
     @staticmethod
     def map_attrs_to_raw(attrs):
         raw = attrs.copy()
         raw['file_name'] = encode_ja2_string(attrs['file_name'], pad=256)
-        raw['time'] = int((mktime(attrs['time'].timetuple()) + 11644473600.0) * 10000000.0)
+        raw['time'] = int((timegm(attrs['time']) + 11644473600.0) * 10000000.0)
         return raw
 
 

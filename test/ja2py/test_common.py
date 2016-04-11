@@ -1,6 +1,6 @@
 import unittest
 
-from unittest.mock import Mock
+from mock import MagicMock as Mock
 from collections import OrderedDict
 
 from ja2py.fileformats import encode_ja2_string, decode_ja2_string, Ja2FileHeader

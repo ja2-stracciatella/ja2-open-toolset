@@ -176,20 +176,19 @@ def _load_raw_sub_image(f, palette, sub_image_header):
 
 
 def _to_sub_image(image, sub_image_header, aux_image_data):
-    sub = SubImage8Bit(image)
+    aux_data = {
+        'wall_orientation': aux_image_data['wall_orientation'],
+        'number_of_tiles': aux_image_data['number_of_tiles'],
+        'tile_location_index': aux_image_data['tile_location_index'],
+        'current_frame': aux_image_data['current_frame'],
+        'number_of_frames': aux_image_data['number_of_frames'],
+    } if aux_image_data else None
 
-    sub.offsets = (sub_image_header['offset_x'], sub_image_header['offset_y'])
-
-    if aux_image_data:
-        sub.aux_data = {
-            'wall_orientation': aux_image_data['wall_orientation'],
-            'number_of_tiles': aux_image_data['number_of_tiles'],
-            'tile_location_index': aux_image_data['tile_location_index'],
-            'current_frame': aux_image_data['current_frame'],
-            'number_of_frames': aux_image_data['number_of_frames'],
-        }
-
-    return sub
+    return SubImage8Bit(
+        image,
+        offsets=(sub_image_header['offset_x'], sub_image_header['offset_y']),
+        aux_data=aux_data
+    )
 
 
 def load_8bit_sti(file):

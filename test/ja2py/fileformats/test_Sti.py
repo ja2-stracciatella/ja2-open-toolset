@@ -303,8 +303,7 @@ class TestLoad16BitSti(unittest.TestCase):
     def test_dimensions(self):
         img = load_16bit_sti(create_16_bit_sti())
 
-        self.assertEqual(img.width, 3)
-        self.assertEqual(img.height, 2)
+        self.assertEqual(img.size, (3, 2))
 
     def test_image_data(self):
         img = load_16bit_sti(create_16_bit_sti())

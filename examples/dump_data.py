@@ -23,10 +23,11 @@ import argparse
 import os
 import sys
 import glob
+import json
 
 sys.path.append(os.getcwd())
 
-from ja2py.fileformats import SlfFS, Sti, is_8bit_sti, is_16bit_sti, load_8bit_sti, load_16bit_sti
+from ja2py.fileformats import SlfFS, Sti, is_8bit_sti, is_16bit_sti, load_8bit_sti, load_16bit_sti, load_gap
 from sti_to_png import write_8bit_png_from_sti, write_24bit_png_from_sti, write_sequence_of_8bit_images_to_target_directory
 
 
@@ -60,9 +61,24 @@ def dump_sti(output_folder, file_path, slf_fs, args):
             write_24bit_png_from_sti(to_path, sti)
 
 
+def dump_gap(output_folder, file_path, slf_fs, args):
+    json_file_path = os.path.splitext(file_path)[0] + '.gap.json'
+    to_path = os.path.join(output_folder, json_file_path[1:])
+    to_dir = os.path.dirname(to_path)
+    if args.verbose:
+        print("Dumping JSON from GAP file: {}".format(file_path))
+    if not os.path.exists(to_dir):
+        os.makedirs(to_dir)
+
+    with slf_fs.open(file_path, 'rb') as from_file, open(to_path, 'w', encoding='utf8') as to_file:
+        gap_list = load_gap(from_file)
+        json.dump(gap_list, to_file, indent=2)
+
+
 def dump_directory(output_folder, slf_fs, directory, args):
     special_file_handlers = {
-        '.sti': dump_sti
+        '.sti': dump_sti,
+        '.gap': dump_gap
     }
 
     for file in slf_fs.listdir(directory, files_only=True):

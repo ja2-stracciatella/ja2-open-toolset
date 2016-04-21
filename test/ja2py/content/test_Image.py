@@ -167,6 +167,40 @@ class TestImages8Bit(unittest.TestCase):
         with self.assertRaises(ValueError):
             imgs.remove(raw4)
 
+    def test_animated(self):
+        raws, palette = create_indexed_images()
+
+        self.assertFalse(Images8Bit(raws, palette).animated)
+
+        raws[0].aux_data = {'number_of_frames': 0}
+        self.assertFalse(Images8Bit(raws, palette).animated)
+
+        raws[0].aux_data = {'number_of_frames': 2}
+        self.assertTrue(Images8Bit(raws, palette).animated)
+
+    def test_animations_animated_image(self):
+        non_animated_raws, non_animated_palette = create_indexed_images()
+
+        raw1 = SubImage8Bit(Image.new('P', (2, 2)), aux_data={'number_of_frames': 1})
+        raw2 = SubImage8Bit(Image.new('P', (2, 2)), aux_data={'number_of_frames': 2})
+        raw3 = SubImage8Bit(Image.new('P', (2, 2)), aux_data={'number_of_frames': 0})
+        palette = ImagePalette.ImagePalette('RGB')
+        raw1.image.putpalette(palette.tobytes())
+        raw2.image.putpalette(palette.tobytes())
+        raw3.image.putpalette(palette.tobytes())
+
+        self.assertEqual(Images8Bit([raw1, raw2, raw3], palette).animations, (
+            (raw1, ),
+            (raw2,
+             raw3)
+        ))
+        self.assertEqual(Images8Bit([raw2, raw3], palette).animations, (
+            (raw2,
+             raw3),
+        ))
+        self.assertEqual(Images8Bit(non_animated_raws, non_animated_palette).animations, None)
+
+
 
 
 

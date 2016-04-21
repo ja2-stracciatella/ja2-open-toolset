@@ -27,12 +27,7 @@ import glob
 sys.path.append(os.getcwd())
 
 from ja2py.fileformats import SlfFS, Sti, is_8bit_sti, is_16bit_sti, load_8bit_sti, load_16bit_sti
-from sti_to_png import write_8bit_png_from_sti, write_24bit_png_from_sti
-
-def write_sequence_of_8bit_images_to_target_directory(sequence, target_directory):
-    for image_index, sub_image in enumerate(sequence):
-        image_file = os.path.join(target_directory, '{}.png'.format(image_index))
-        sub_image.image.save(image_file, transparency=0)
+from sti_to_png import write_8bit_png_from_sti, write_24bit_png_from_sti, write_sequence_of_8bit_images_to_target_directory
 
 
 def dump_file(output_folder, file_path, slf_fs, args):

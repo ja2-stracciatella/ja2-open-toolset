@@ -1,3 +1,4 @@
+from functools import reduce
 from PIL import Image, ImagePalette
 
 class Image16Bit(object):
@@ -56,6 +57,21 @@ class Images8Bit(object):
     @property
     def images(self):
         return self._images
+
+    @property
+    def animated(self):
+        return any(i.aux_data is not None and i.aux_data['number_of_frames'] != 0 for i in self._images)
+
+    @property
+    def animations(self):
+        def reducer(acc, sub_img):
+            if sub_img.aux_data['number_of_frames'] != 0:
+                acc.append([])
+            acc[-1].append(sub_img)
+            return acc
+        if not self.animated:
+            return None
+        return tuple(tuple(i) for i in reduce(reducer, self._images, []))
 
     def append(self, sub_img):
         self._validate_sub_image(sub_img)

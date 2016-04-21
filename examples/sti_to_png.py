@@ -27,10 +27,11 @@ sys.path.append(os.getcwd())
 
 from ja2py.fileformats.Sti import load_8bit_sti, load_16bit_sti, is_8bit_sti, is_16bit_sti
 
+
 def write_sequence_of_8bit_images_to_target_directory(sequence, target_directory):
-    for image_index, image in enumerate(sequence):
+    for image_index, sub_image in enumerate(sequence):
         image_file = os.path.join(target_directory, '{}.png'.format(image_index))
-        image.image.save(image_file, transparency=0)
+        sub_image.image.save(image_file, transparency=0)
 
 
 def write_24bit_png_from_sti(output_file, sti):
@@ -39,11 +40,18 @@ def write_24bit_png_from_sti(output_file, sti):
 
 def write_8bit_png_from_sti(output_file, sti, normalize):
     if len(sti.images) > 1:
-        base_dir = os.path.splitext(output_file)[0]
+        base_dir = os.path.splitext(output_file)[0] + '.STI'
         if not os.path.exists(base_dir):
             os.makedirs(base_dir)
 
-        write_sequence_of_8bit_images_to_target_directory(sti.images, base_dir)
+        if sti.animated:
+            for i, animation in enumerate(sti.animations):
+                animation_dir = os.path.join(base_dir, 'ANI{}'.format(i))
+                if not os.path.exists(animation_dir):
+                    os.makedirs(animation_dir)
+                write_sequence_of_8bit_images_to_target_directory(animation, animation_dir)
+        else:
+            write_sequence_of_8bit_images_to_target_directory(sti.images, base_dir)
     else:
         sti.images[0].image.save(output_file, transparency=0)
 

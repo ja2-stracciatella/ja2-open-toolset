@@ -102,9 +102,71 @@ class TestImages8Bit(unittest.TestCase):
 
     def test_len(self):
         raws, palette = create_indexed_images()
+
+        self.assertEqual(len(Images8Bit([raws[0]], palette)), 1)
+        self.assertEqual(len(Images8Bit(raws, palette)), 2)
+
+    def test_images_are_not_mutable(self):
+        raws, palette = create_indexed_images()
         imgs = Images8Bit(raws, palette)
 
+        with self.assertRaises(TypeError):
+            imgs.images[0] = raws[1]
+
+    def test_append(self):
+        raws, palette = create_indexed_images()
+        imgs = Images8Bit([raws[0]], palette)
+
+        imgs.append(raws[1])
         self.assertEqual(len(imgs), 2)
+        self.assertEqual(imgs.images[1], raws[1])
+
+        with self.assertRaises(ValueError):
+            imgs.append('Test')
+
+        raw3 = SubImage8Bit(Image.new('P', (2, 2)))
+        other_palette = ImagePalette.ImagePalette('RGB', b'\x01\x01\x01', 3)
+        raw3.image.putpalette(other_palette)
+        with self.assertRaises(ValueError):
+            imgs.append(raw3)
+
+    def test_insert(self):
+        raws, palette = create_indexed_images()
+        imgs = Images8Bit(raws, palette)
+
+        raw3 = SubImage8Bit(Image.new('P', (2, 2)))
+        raw4 = SubImage8Bit(Image.new('P', (2, 2)))
+
+        imgs.insert(0, raw3)
+
+        self.assertEqual(imgs.images, (raw3, raws[0], raws[1]))
+
+        imgs.insert(2, raw4)
+        self.assertEqual(imgs.images, (raw3, raws[0], raw4, raws[1]))
+
+        with self.assertRaises(ValueError):
+            imgs.insert(5, raw4)
+        with self.assertRaises(ValueError):
+            imgs.insert(-1, raw4)
+        with self.assertRaises(ValueError):
+            imgs.insert(5, '')
+
+    def test_remove(self):
+        raws, palette = create_indexed_images()
+        raw3 = SubImage8Bit(Image.new('P', (2, 2)))
+        raw4 = SubImage8Bit(Image.new('P', (2, 2)))
+        imgs = Images8Bit(raws + [ raw3, raw4 ], palette)
+
+        imgs.remove(raws[0])
+
+        self.assertEqual(imgs.images, (raws[1], raw3, raw4))
+
+        imgs.remove(raw4)
+        self.assertEqual(imgs.images, (raws[1], raw3))
+
+        with self.assertRaises(ValueError):
+            imgs.remove(raw4)
+
 
 
 

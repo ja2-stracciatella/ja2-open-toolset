@@ -144,10 +144,13 @@ class SlfFS(FS):
             if self._path_fs.isfile(directory):
                 # Sometimes there exists a file that has the same name as a directory
                 # Solution: Rename it with a _DIRECTORY_CONFLICT suffix
-                self._path_fs.remove(directory)
-                self._path_fs.createfile(directory + DIRECTORY_CONFLICT_SUFFIX)
-            self._path_fs.makedir(directory, recursive=True, allow_recreate=True)
-            self._path_fs.createfile('/'.join(path))
+                self._path_fs.move(directory, directory + DIRECTORY_CONFLICT_SUFFIX)
+
+            if self._path_fs.isdir('/'.join(path)):
+                self._path_fs.createfile('/'.join(path) + DIRECTORY_CONFLICT_SUFFIX)
+            else:
+                self._path_fs.makedir(directory, recursive=True, allow_recreate=True)
+                self._path_fs.createfile('/'.join(path))
 
     def _read_entry(self, index):
         entry_size = SlfEntry.get_size()

@@ -124,6 +124,31 @@ def create_test_slf_fs():
                    bytes(first_entry) + bytes(second_entry) + bytes(third_entry) + bytes(fourth_entry))
 
 
+def create_slf_fs_with_directory_conflict(reversed=False):
+    time = strptime('19900101T010000UTC', "%Y%m%dT%H%M%S%Z")
+    header = SlfHeader(
+        library_name='SomeFile',
+        library_path='SomePath',
+        number_of_entries=2,
+        used=2,
+        sort=1,
+        version=1,
+        contains_subdirectories=1
+    )
+    data_offset = SlfHeader.get_size()
+    first_entry = SlfEntry(file_name='foo\\bar', offset=data_offset, length=5, state=1, time=time)
+    second_entry = SlfEntry(file_name='foo', offset=data_offset+5, length=6, state=1, time=time)
+
+    first_data = b'First'
+    second_data = b'Second'
+
+    entries = [bytes(first_entry), bytes(second_entry)]
+    if reversed:
+        entries.reverse()
+
+    return BytesIO(bytes(header) + first_data + second_data + b''.join(entries))
+
+
 class TestSlfFS(unittest.TestCase):
     def test_reading_directory_structure(self):
         slf_file = SlfFS(create_test_slf_fs())
@@ -146,10 +171,23 @@ class TestSlfFS(unittest.TestCase):
         self.assertTrue(slf_file.isfile('/carrot'))
         self.assertFalse(slf_file.isdir('/carrot'))
 
+    def test_directory_conflict(self):
+        slf_file = SlfFS(create_slf_fs_with_directory_conflict())
+
+        self.assertTrue(slf_file.isdir('/foo'))
+        self.assertTrue(slf_file.isfile('/foo_DIRECTORY_CONFLICT'))
+        with slf_file.open('/foo_DIRECTORY_CONFLICT', 'rb') as f:
+            self.assertEqual(f.read(), b'Second')
+
+        slf_file = SlfFS(create_slf_fs_with_directory_conflict(reversed=True))
+
+        self.assertTrue(slf_file.isdir('/foo'))
+        self.assertTrue(slf_file.isfile('/foo_DIRECTORY_CONFLICT'))
+        with slf_file.open('/foo_DIRECTORY_CONFLICT', 'rb') as f:
+            self.assertEqual(f.read(), b'Second')
+
     def test_listing_directory(self):
         slf_file = SlfFS(create_test_slf_fs())
-
-        print(slf_file.listdir('/'))
 
         self.assertEqual(set(slf_file.listdir('/')), {'spam', 'carrot', 'foo'})
         self.assertEqual(set(slf_file.listdir('/foo')), {'bar.baz'})

@@ -1,8 +1,8 @@
 import unittest
-from PIL import ImagePalette
+from PIL import Image, ImagePalette
 from .fixtures import *
 from ja2py.fileformats import Sti16BitHeader, Sti8BitHeader, StiHeader, StiSubImageHeader, AuxObjectData,\
-                              is_16bit_sti, is_8bit_sti, load_16bit_sti, load_8bit_sti
+                              is_16bit_sti, is_8bit_sti, load_16bit_sti, load_8bit_sti, save_16bit_sti
 from ja2py.content import Image16Bit, Images8Bit
 
 
@@ -358,6 +358,29 @@ class TestLoad8BitSti(unittest.TestCase):
             'current_frame': 1,
             'number_of_frames': 0,
         })
+
+
+class TestWrite16BitSti(unittest.TestCase):
+    def test_write(self):
+        img = Image16Bit(Image.new('RGB', (3, 1), color=(255, 0, 0)))
+        buffer = BytesIO()
+
+        save_16bit_sti(img, buffer)
+
+        self.assertEqual(buffer.getvalue(), b'STCI\x06\x00\x00\x00\x06\x00\x00\x00' +
+                                            b'\x00\x00\x00\x00' + b'\x04\x00\x00\x00' + b'\x01\x00\x03\x00' +
+                                            b'\x00\xF8\x00\x00\xe0\x07\x00\x00\x1f\x00\x00\x00\x00\x00\x00\x00' +
+                                            b'\x05\x06\x05\x00' + b'\x10\x00\x00\x00' + b'\x00\x00\x00\x00' +
+                                            b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00' +
+                                            (b'\x00\xF8' * 3)
+
+                         )
+    def test_write_with_wrong_type(self):
+        img = {}
+        buffer = BytesIO()
+
+        with self.assertRaises(ValueError):
+            save_16bit_sti(img, buffer)
 
 
 

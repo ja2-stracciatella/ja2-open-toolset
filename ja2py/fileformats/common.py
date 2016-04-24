@@ -42,7 +42,7 @@ class Ja2FileHeader(object):
 
     def __setitem__(self, key, value):
         if key not in self.keys() or key is None:
-            raise KeyError()
+            raise KeyError('Invalid key {0}'.format(key))
         self.field_values[key] = value
 
     def __getitem__(self, key):

@@ -218,3 +218,44 @@ def load_8bit_sti(file):
     )
 
 
+def save_16bit_sti(ja2_image, file):
+    if not isinstance(ja2_image, Image16Bit):
+        raise ValueError('Input needs to be of type Image16Bit')
+
+    width, height = ja2_image.size[0], ja2_image.size[1]
+    image_size = width * height * 2
+    raw_image = ja2_image.image
+    format_specific_header = Sti16BitHeader(
+        red_color_mask=0xF800,
+        green_color_mask=0x7E0,
+        blue_color_mask=0x1F,
+        alpha_channel_mask=0,
+        red_color_depth=5,
+        green_color_depth=6,
+        blue_color_depth=5,
+        alpha_channel_depth=0
+    )
+    header = StiHeader(
+        file_identifier=b'STCI',
+        initial_size=image_size,
+        size_after_compression=image_size,
+        transparent_color=0,
+        width=width,
+        height=height,
+        format_specific_header=bytes(format_specific_header),
+        color_depth=16,
+        aux_data_size=0,
+        flags=0
+    )
+    header.set_flag('flags', 'RGB', True)
+
+    file.write(bytes(header))
+
+    for y in range(height):
+        for x in range(width):
+            pix = raw_image.getpixel((x, y))
+            r = pix[0] >> 3
+            g = pix[1] >> 3
+            b = pix[2] >> 3
+            rgb = b + (g << 6) + (r << 11)
+            file.write(struct.pack('<H', rgb))

@@ -18,10 +18,10 @@
 ##############################################################################
 
 import os
-import struct
 import io
 from time import gmtime
 from calendar import timegm
+from datetime import datetime
 from fs.base import FS
 from fs.errors import CreateFailedError, UnsupportedError, ResourceNotFoundError, ResourceInvalidError
 from fs.memoryfs import MemoryFS
@@ -257,9 +257,10 @@ class BufferedSlfFS(MultiFS):
         names = list(self.walkfiles('/'))
 
         offset_start = header_size
-        sizes = list(map(lambda f: self.getinfo(f)['size'], names))
-        times = list(map(lambda f: self.getinfo(f)['modified_time'], names))
-        offsets = list(map(lambda i:  sum(sizes[:i]) + offset_start, range(len(sizes))))
+        sizes = list(self.getinfo(f)['size'] for f in names)
+        times = list(self.getinfo(f)['modified_time'] for f in names)
+        times = list(t.timetuple() if isinstance(t, datetime) else t for t in times)
+        offsets = list(sum(sizes[:i]) + offset_start for i in range(len(sizes)))
 
         header = SlfHeader(
            library_name=self.library_name,

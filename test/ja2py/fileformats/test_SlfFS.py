@@ -1,5 +1,6 @@
 import unittest
 
+from datetime import datetime
 from io import BytesIO
 from time import strptime
 from fs.errors import CreateFailedError, UnsupportedError, ResourceNotFoundError, ResourceInvalidError
@@ -295,7 +296,7 @@ class TestBufferedSlfFS(unittest.TestCase):
         self.assertFalse(slf_file.exists('/spam'))
 
     def test_writing_to_disk_works(self):
-        time = strptime('20160325T183100UTC', "%Y%m%dT%H%M%S%Z")
+        time = datetime.strptime('20160325T183100UTC', "%Y%m%dT%H%M%S%Z")
         slf_file = BufferedSlfFS(create_test_slf_fs())
         expected_bytes = (b'SomeFile' + (248 * b'\x00') + b'SomePath' + (248 * b'\x00') + b'\x02\x00\x00\x00' +
                           b'\x02\x00\x00\x00' + b'\x01\x00' + b'\x01\x00' + b'\x01\x00\x00\x00' + b'\x00\x00\x00\x00' +

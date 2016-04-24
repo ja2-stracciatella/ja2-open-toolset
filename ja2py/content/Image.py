@@ -49,7 +49,7 @@ class Images8Bit(object):
     def _validate_sub_image(self, sub_image):
         if not isinstance(sub_image, SubImage8Bit):
             raise ValueError('All images need be of SubImage8Bit class for Images8Bit')
-        if sub_image.image.palette.getdata() != self._palette.getdata():
+        if sub_image.image.palette.getdata()[1] != self._palette.getdata()[1]:
             raise ValueError('All images need to have the same palette for Images8Bit')
 
     @property

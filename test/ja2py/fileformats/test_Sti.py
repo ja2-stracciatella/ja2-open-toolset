@@ -454,6 +454,28 @@ class TestWrite8BitSti(unittest.TestCase):
                          # Data
                          b'\x02\x01\x01\x00\x02\x01\x01\x00')
 
+    def test_write_with_raw_palette(self):
+        palette = ImagePalette.raw('RGB', b'\x01\x02\x03\x04\x05\x06')
+        img = SubImage8Bit(Image.new('P', (2, 2), color=1))
+        img.image.putpalette(palette)
+        imgs = Images8Bit([img], palette=palette, width=9, height=8)
+        buffer = BytesIO()
+
+        save_8bit_sti(imgs, buffer)
+
+        self.assertEqual(buffer.getvalue(),
+                         # Header
+                         b'STCI\x48\x00\x00\x00\x08\x00\x00\x00' +
+                         b'\x00\x00\x00\x00' + b'\x28\x00\x00\x00' + b'\x08\x00\x09\x00' +
+                         b'\x00\x01\x00\x00\x01\x00\x08\x08\x08\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00' +
+                         b'\x08' + (3 * b'\x00') + b'\x00\x00\x00\x00' + (12 * b'\x00') +
+                         # Palette
+                         b'\x01\x02\x03' + b'\x04\x05\x06' + (254 * b'\x00\x00\x00') +
+                         # Sub Image Header
+                         b'\x00\x00\x00\x00' + b'\x08\x00\x00\x00' + b'\x00\x00' + b'\x00\x00' + b'\x02\x00' + b'\x02\x00' +
+                         # Data
+                         b'\x02\x01\x01\x00\x02\x01\x01\x00')
+
     def test_write_with_multiple_images(self):
         palette = ImagePalette.ImagePalette('RGB', b'\x01\x01\x01', 3)
         img1 = SubImage8Bit(Image.new('P', (2, 2), color=1))
@@ -479,6 +501,7 @@ class TestWrite8BitSti(unittest.TestCase):
                          # Data
                          b'\x02\x01\x01\x00\x02\x01\x01\x00' +
                          b'\x83\x00')
+
 
     def test_write_with_multiple_images_mixed_aux_data(self):
         palette = ImagePalette.ImagePalette('RGB', b'\x01\x01\x01\x02\x02\x02', 6)

@@ -292,13 +292,17 @@ def _sub_image_to_bytes(sub_image):
         compressed_buffer.write(b'\x00')
     return compressed_buffer.getvalue()
 
+
 def _palette_to_bytes(palette):
-    wrong_order = palette.tobytes()
-    number_of_colors = int(len(wrong_order) / 3)
     buffer = io.BytesIO()
 
-    for i in range(number_of_colors):
-        buffer.write(wrong_order[i:i+1] + wrong_order[number_of_colors+i:number_of_colors+i+1] + wrong_order[2*number_of_colors+i:2*number_of_colors+i+1])
+    if not palette.rawmode:
+        wrong_order = palette.tobytes()
+        number_of_colors = int(len(wrong_order) / 3)
+        for i in range(number_of_colors):
+            buffer.write(wrong_order[i:i+1] + wrong_order[number_of_colors+i:number_of_colors+i+1] + wrong_order[2*number_of_colors+i:2*number_of_colors+i+1])
+    else:
+        buffer.write(palette.palette)
 
     return buffer.getvalue()
 

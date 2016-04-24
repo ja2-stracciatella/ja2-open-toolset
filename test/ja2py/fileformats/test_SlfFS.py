@@ -150,6 +150,14 @@ def create_slf_fs_with_directory_conflict(reversed=False):
 
 
 class TestSlfFS(unittest.TestCase):
+    def test_library_name(self):
+        slf_file = SlfFS(create_test_slf_fs())
+
+        self.assertEqual(slf_file.library_name, 'SomeFile')
+        self.assertEqual(slf_file.library_path, 'SomePath')
+        self.assertEqual(slf_file.sort, 1)
+        self.assertEqual(slf_file.version, 1)
+
     def test_reading_directory_structure(self):
         slf_file = SlfFS(create_test_slf_fs())
 
@@ -250,6 +258,14 @@ class TestSlfFS(unittest.TestCase):
 
 
 class TestBufferedSlfFS(unittest.TestCase):
+    def test_library_name(self):
+        slf_file = BufferedSlfFS(create_test_slf_fs())
+
+        self.assertEqual(slf_file.library_name, 'SomeFile')
+        self.assertEqual(slf_file.library_path, 'SomePath')
+        self.assertEqual(slf_file.sort, 1)
+        self.assertEqual(slf_file.version, 1)
+
     def test_reading_still_works(self):
         slf_file = BufferedSlfFS(create_test_slf_fs())
 

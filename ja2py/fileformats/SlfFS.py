@@ -136,6 +136,11 @@ class SlfFS(FS):
         self.header = SlfHeader.from_bytes(self.file.read(SlfHeader.get_size()))
         self.entries = list(map(self._read_entry, range(self.header['number_of_entries'])))
 
+        self.library_name = self.header['library_name']
+        self.library_path = self.header['library_path']
+        self.sort = self.header['sort']
+        self.version = self.header['version']
+
         self._path_fs = MemoryFS()
         for e in self.entries:
             path = _get_normalized_filename(e['file_name']).split('/')
@@ -221,11 +226,10 @@ class BufferedSlfFS(MultiFS):
         if slf_filename is not None:
             self._file_fs = SlfFS(slf_filename)
             self.addfs('file', self._file_fs)
-            self.library_name = self._file_fs.header['library_name']
-            self.library_path = self._file_fs.header['library_path']
-            self.version = self._file_fs.header['version']
-            self.used = self._file_fs.header['used']
-            self.sort = self._file_fs.header['sort']
+            self.library_name = self._file_fs.library_name
+            self.library_path = self._file_fs.library_path
+            self.version = self._file_fs.version
+            self.sort = self._file_fs.sort
             self.contains_subdirectories = self._file_fs.header['contains_subdirectories']
         else:
             self.library_name = 'Custom'

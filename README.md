@@ -17,20 +17,21 @@ Requirement: Python 3.2 or later
 - Download or clone this repository
 - Optional: Create and enable virtual environment so the dependencies arent installed globally
 
-  ```
+  ```bash
   pyvenv venv && source venv/bin/activate
   ```
 
 - Install dependencies
 
-  ```
-  pip install -r requirements.txt
+  ```bash
+  pip install -e .
+  # Optionally install dependencies required to develop
   pip install -r requirements-dev.txt
   ```
 
 - Run one of the examples, e.g. extract all slf archives of you JA2 installation
 
-  ```
+  ```bash
   python examples/dump_data.py --verbose --output-folder /some/folder /your/ja2/data/dir
   ```
 

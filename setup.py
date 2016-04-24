@@ -4,4 +4,8 @@ setup(name='ja2py',
       author='Stefan Lau',
       author_email='github@stefanlau.com',
       url='https://github.com/ja2-stracciatella/ja2-open-toolset',
+      install_requires=[
+            'fs>=0.5.2',
+            'Pillow>=2.8.2'
+      ],
       packages=find_packages())

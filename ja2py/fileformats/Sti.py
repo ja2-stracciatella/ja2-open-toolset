@@ -222,6 +222,7 @@ def load_8bit_sti(file):
 
     sub_image_headers = [StiSubImageHeader.from_bytes(f.read(StiSubImageHeader.get_size()))
                          for _ in range(header_8bit['number_of_images'])]
+
     images = [_load_raw_sub_image(f, palette, s) for s in sub_image_headers]
 
     aux_image_data = [None] * len(images)
@@ -231,7 +232,9 @@ def load_8bit_sti(file):
 
     return Images8Bit(
         list([_to_sub_image(i, s, a) for i, s, a in zip(images, sub_image_headers, aux_image_data)]),
-        palette
+        palette,
+        width=header['width'],
+        height=header['height']
     )
 
 
@@ -286,7 +289,18 @@ def _sub_image_to_bytes(sub_image):
 
     for i in range(height):
         compressed_buffer.write(etrle_compress(uncompressed_data[i*width:(i+1)*width]))
+        compressed_buffer.write(b'\x00')
     return compressed_buffer.getvalue()
+
+def _palette_to_bytes(palette):
+    wrong_order = palette.tobytes()
+    number_of_colors = int(len(wrong_order) / 3)
+    buffer = io.BytesIO()
+
+    for i in range(number_of_colors):
+        buffer.write(wrong_order[i:i+1] + wrong_order[number_of_colors+i:number_of_colors+i+1] + wrong_order[2*number_of_colors+i:2*number_of_colors+i+1])
+
+    return buffer.getvalue()
 
 
 def save_8bit_sti(ja2_images, file):
@@ -297,9 +311,9 @@ def save_8bit_sti(ja2_images, file):
     if len(aux_data) != 0 and not len(aux_data) == len(ja2_images):
         raise ValueError('Either all or none of the sub_images needs to have aux_data to save')
 
-    palette_bytes = ja2_images.palette.tobytes().ljust(256 * 3, b'\x00')
+    palette_bytes = _palette_to_bytes(ja2_images.palette).ljust(256 * 3, b'\x00')
 
-    initial_size = sum(i.image.size[0] * i.image.size[1] for i in ja2_images.images)
+    initial_size = ja2_images.width * ja2_images.height
     compressed_images = list(_sub_image_to_bytes(s) for s in ja2_images.images)
     compressed_image_sizes = list(len(i) for i in compressed_images)
     offsets = list(sum(compressed_image_sizes[:i]) for i in range(len(compressed_images)))
@@ -310,8 +324,8 @@ def save_8bit_sti(ja2_images, file):
             length=comp_size,
             offset_x=sub.offsets[0],
             offset_y=sub.offsets[1],
-            height=sub.image.size[0],
-            width=sub.image.size[1]
+            height=sub.image.size[1],
+            width=sub.image.size[0]
         )
         for sub, comp_size, offset in zip(ja2_images.images, compressed_image_sizes, offsets)
     )
@@ -328,8 +342,8 @@ def save_8bit_sti(ja2_images, file):
         initial_size=initial_size,
         size_after_compression=size_after_compression,
         transparent_color=0,
-        width=max(i.image.size[0] for i in ja2_images.images),
-        height=sum(i.image.size[1] for i in ja2_images.images),
+        width=ja2_images.width,
+        height=ja2_images.height,
         format_specific_header=bytes(format_specific_header),
         color_depth=8,
         aux_data_size=len(aux_data) * AuxObjectData.get_size(),

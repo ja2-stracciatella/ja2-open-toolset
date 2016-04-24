@@ -341,6 +341,11 @@ class TestLoad8BitSti(unittest.TestCase):
         img = load_8bit_sti(create_8_bit_multi_image_sti())
         self.assertIsInstance(img, Images8Bit)
 
+    def test_width_height(self):
+        img = load_8bit_sti(create_8_bit_multi_image_sti())
+        self.assertEqual(img.width, 8)
+        self.assertEqual(img.height, 9)
+
     def test_palette(self):
         img = load_8bit_sti(create_8_bit_multi_image_sti())
         self.assertIsInstance(img.palette, ImagePalette.ImagePalette)
@@ -428,29 +433,29 @@ class TestWrite8BitSti(unittest.TestCase):
         self.assertEqual(buffer.getvalue(), b'')
 
     def test_write_with_single_image(self):
-        palette = ImagePalette.ImagePalette('RGB', b'\x01\x01\x01', 3)
+        palette = ImagePalette.ImagePalette('RGB', b'\x01\x02\x03\x04\x05\x06', 6)
         img = SubImage8Bit(Image.new('P', (2, 2), color=1))
         img.image.putpalette(palette)
-        imgs = Images8Bit([img], palette=palette)
+        imgs = Images8Bit([img], palette=palette, width=9, height=8)
         buffer = BytesIO()
 
         save_8bit_sti(imgs, buffer)
 
         self.assertEqual(buffer.getvalue(),
                          # Header
-                         b'STCI\x04\x00\x00\x00\x06\x00\x00\x00' +
-                         b'\x00\x00\x00\x00' + b'\x28\x00\x00\x00' + b'\x02\x00\x02\x00' +
+                         b'STCI\x48\x00\x00\x00\x08\x00\x00\x00' +
+                         b'\x00\x00\x00\x00' + b'\x28\x00\x00\x00' + b'\x08\x00\x09\x00' +
                          b'\x00\x01\x00\x00\x01\x00\x08\x08\x08\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00' +
                          b'\x08' + (3 * b'\x00') + b'\x00\x00\x00\x00' + (12 * b'\x00') +
                          # Palette
-                         b'\x01\x01\x01' + (255 * b'\x00\x00\x00') +
+                         b'\x01\x03\x05' + b'\x02\x04\x06' + (254 * b'\x00\x00\x00') +
                          # Sub Image Header
-                         b'\x00\x00\x00\x00' + b'\x06\x00\x00\x00' + b'\x00\x00' + b'\x00\x00' + b'\x02\x00' + b'\x02\x00' +
+                         b'\x00\x00\x00\x00' + b'\x08\x00\x00\x00' + b'\x00\x00' + b'\x00\x00' + b'\x02\x00' + b'\x02\x00' +
                          # Data
-                         b'\x02\x01\x01\x02\x01\x01')
+                         b'\x02\x01\x01\x00\x02\x01\x01\x00')
 
     def test_write_with_multiple_images(self):
-        palette = ImagePalette.ImagePalette('RGB', b'\x01\x01\x01\x02\x02\x02', 6)
+        palette = ImagePalette.ImagePalette('RGB', b'\x01\x01\x01', 3)
         img1 = SubImage8Bit(Image.new('P', (2, 2), color=1))
         img2 = SubImage8Bit(Image.new('P', (3, 1), color=0), offsets=(5, 6))
         img1.image.putpalette(palette)
@@ -462,18 +467,18 @@ class TestWrite8BitSti(unittest.TestCase):
 
         self.assertEqual(buffer.getvalue(),
                          # Header
-                         b'STCI\x07\x00\x00\x00\x07\x00\x00\x00' +
-                         b'\x00\x00\x00\x00' + b'\x28\x00\x00\x00' + b'\x03\x00\x03\x00' +
+                         b'STCI\x00\x00\x00\x00\x0a\x00\x00\x00' +
+                         b'\x00\x00\x00\x00' + b'\x28\x00\x00\x00' + b'\x00\x00\x00\x00' +
                          b'\x00\x01\x00\x00\x02\x00\x08\x08\x08\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00' +
                          b'\x08' + (3 * b'\x00') + b'\x00\x00\x00\x00' + (12 * b'\x00') +
                          # Palette
-                         b'\x01\x01\x01' + b'\x02\x02\x02' + (254 * b'\x00\x00\x00') +
+                         b'\x01\x01\x01' + (255 * b'\x00\x00\x00') +
                          # Sub Image Header
-                         b'\x00\x00\x00\x00' + b'\x06\x00\x00\x00' + b'\x00\x00' + b'\x00\x00' + b'\x02\x00' + b'\x02\x00' +
-                         b'\x06\x00\x00\x00' + b'\x01\x00\x00\x00' + b'\x05\x00' + b'\x06\x00' + b'\x03\x00' + b'\x01\x00' +
+                         b'\x00\x00\x00\x00' + b'\x08\x00\x00\x00' + b'\x00\x00' + b'\x00\x00' + b'\x02\x00' + b'\x02\x00' +
+                         b'\x08\x00\x00\x00' + b'\x02\x00\x00\x00' + b'\x05\x00' + b'\x06\x00' + b'\x01\x00' + b'\x03\x00' +
                          # Data
-                         b'\x02\x01\x01\x02\x01\x01' +
-                         b'\x83')
+                         b'\x02\x01\x01\x00\x02\x01\x01\x00' +
+                         b'\x83\x00')
 
     def test_write_with_multiple_images_mixed_aux_data(self):
         palette = ImagePalette.ImagePalette('RGB', b'\x01\x01\x01\x02\x02\x02', 6)
@@ -488,7 +493,7 @@ class TestWrite8BitSti(unittest.TestCase):
             save_8bit_sti(imgs, buffer)
 
     def test_write_with_multiple_images_with_aux_data(self):
-        palette = ImagePalette.ImagePalette('RGB', b'\x01\x01\x01\x02\x02\x02', 6)
+        palette = ImagePalette.ImagePalette('RGB', b'\x01\x01\x01', 3)
         img1 = SubImage8Bit(Image.new('P', (2, 2), color=1), aux_data={
             'wall_orientation': 1,
             'number_of_tiles': 2,
@@ -524,18 +529,18 @@ class TestWrite8BitSti(unittest.TestCase):
 
         self.assertEqual(buffer.getvalue(),
                          # Header
-                         b'STCI\x07\x00\x00\x00\x07\x00\x00\x00' +
-                         b'\x00\x00\x00\x00' + b'\x28\x00\x00\x00' + b'\x03\x00\x03\x00' +
+                         b'STCI\x00\x00\x00\x00\x0a\x00\x00\x00' +
+                         b'\x00\x00\x00\x00' + b'\x28\x00\x00\x00' + b'\x00\x00\x00\x00' +
                          b'\x00\x01\x00\x00\x02\x00\x08\x08\x08\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00' +
                          b'\x08' + (3 * b'\x00') + b'\x20\x00\x00\x00' + (12 * b'\x00') +
                          # Palette
-                         b'\x01\x01\x01' + b'\x02\x02\x02' + (254 * b'\x00\x00\x00') +
+                         b'\x01\x01\x01' + (255 * b'\x00\x00\x00') +
                          # Sub Image Header
-                         b'\x00\x00\x00\x00' + b'\x06\x00\x00\x00' + b'\x00\x00' + b'\x00\x00' + b'\x02\x00' + b'\x02\x00' +
-                         b'\x06\x00\x00\x00' + b'\x01\x00\x00\x00' + b'\x00\x00' + b'\x00\x00' + b'\x03\x00' + b'\x01\x00' +
+                         b'\x00\x00\x00\x00' + b'\x08\x00\x00\x00' + b'\x00\x00' + b'\x00\x00' + b'\x02\x00' + b'\x02\x00' +
+                         b'\x08\x00\x00\x00' + b'\x02\x00\x00\x00' + b'\x00\x00' + b'\x00\x00' + b'\x01\x00' + b'\x03\x00' +
                          # Data
-                         b'\x02\x01\x01\x02\x01\x01' +
-                         b'\x83' +
+                         b'\x02\x01\x01\x00\x02\x01\x01\x00' +
+                         b'\x83\x00' +
                          # Aux Data
                          b'\x01\x02\x03\x00' + (3*b'\x00') + b'\x04\x05\x03' + (6*b'\x00') +
                          b'\x06\x07\x08\x00' + (3*b'\x00') + b'\x09\x0A\x01' + (6*b'\x00'))

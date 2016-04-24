@@ -35,10 +35,12 @@ class SubImage8Bit(object):
 
 
 class Images8Bit(object):
-    def __init__(self, images, palette):
+    def __init__(self, images, palette, width=0, height=0):
         if not isinstance(palette, ImagePalette.ImagePalette):
             raise ValueError('palette needs to be an ImagePalette for Images8Bit')
         self._palette = palette
+        self.width = width
+        self.height = height
 
         for sub_image in images:
             self._validate_sub_image(sub_image)

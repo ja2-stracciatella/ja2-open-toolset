@@ -80,11 +80,13 @@ def create_indexed_images():
 class TestImages8Bit(unittest.TestCase):
     def test_default_constructor(self):
         raws, palette = create_indexed_images()
-        imgs = Images8Bit(raws, palette)
+        imgs = Images8Bit(raws, palette, width=1, height=2)
 
         self.assertEqual(imgs.images[0], raws[0])
         self.assertEqual(imgs.images[1], raws[1])
         self.assertEqual(imgs.palette, palette)
+        self.assertEqual(imgs.width, 1)
+        self.assertEqual(imgs.height, 2)
 
     def test_images_with_different_palettes_raise(self):
         raws, palette = create_indexed_images()

@@ -121,8 +121,9 @@ def create_8_bit_animated_sti():
         tile_location_index=2,
         current_frame=0,
         number_of_frames=2,
-        flags=8,
+        flags=0,
     )
+    aux_data_1.set_flag('flags', 'ANIMATED_TILE', True)
 
     data2 = etrle_compress(b'\x01\x01\x00\x00\x00\x00')
     sub_header2 = StiSubImageHeader(
@@ -139,7 +140,7 @@ def create_8_bit_animated_sti():
         tile_location_index=2,
         current_frame=1,
         number_of_frames=0,
-        flags=8,
+        flags=0,
     )
     palette = b'\x01\x02\x03'
 

@@ -100,6 +100,17 @@ class AuxObjectData(Ja2FileHeader):
         (None, '6x')
     ]
 
+    flags = {
+        'flags': {
+            'FULL_TILE': 0,
+            'ANIMATED_TILE': 1,
+            'DYNAMIC_TILE': 2,
+            'INTERACTIVE_TILE': 3,
+            'IGNORES_HEIGHT': 4,
+            'USES_LAND_Z': 5,
+        }
+    }
+
 
 def _get_filelike(file):
     if isinstance(file, str):
@@ -182,6 +193,12 @@ def _to_sub_image(image, sub_image_header, aux_image_data):
         'tile_location_index': aux_image_data['tile_location_index'],
         'current_frame': aux_image_data['current_frame'],
         'number_of_frames': aux_image_data['number_of_frames'],
+        'full_tile': aux_image_data.get_flag('flags', 'FULL_TILE'),
+        'animated_tile': aux_image_data.get_flag('flags', 'ANIMATED_TILE'),
+        'dynamic_tile': aux_image_data.get_flag('flags', 'DYNAMIC_TILE'),
+        'interactive_tile': aux_image_data.get_flag('flags', 'INTERACTIVE_TILE'),
+        'ignores_height': aux_image_data.get_flag('flags', 'IGNORES_HEIGHT'),
+        'uses_land_z': aux_image_data.get_flag('flags', 'USES_LAND_Z'),
     } if aux_image_data else None
 
     return SubImage8Bit(
@@ -328,11 +345,18 @@ def save_8bit_sti(ja2_images, file):
     for compressed in compressed_images:
         file.write(compressed)
     for aux in aux_data:
-        file.write(bytes(AuxObjectData(
+        aux_header = AuxObjectData(
             wall_orientation=aux['wall_orientation'],
             number_of_tiles=aux['number_of_tiles'],
             tile_location_index=aux['tile_location_index'],
             current_frame=aux['current_frame'],
             number_of_frames=aux['number_of_frames'],
             flags=0
-        )))
+        )
+        aux_header.set_flag('flags', 'FULL_TILE', aux['full_tile'])
+        aux_header.set_flag('flags', 'ANIMATED_TILE', aux['animated_tile'])
+        aux_header.set_flag('flags', 'DYNAMIC_TILE', aux['dynamic_tile'])
+        aux_header.set_flag('flags', 'INTERACTIVE_TILE', aux['interactive_tile'])
+        aux_header.set_flag('flags', 'IGNORES_HEIGHT', aux['ignores_height'])
+        aux_header.set_flag('flags', 'USES_LAND_Z', aux['uses_land_z'])
+        file.write(bytes(aux_header))

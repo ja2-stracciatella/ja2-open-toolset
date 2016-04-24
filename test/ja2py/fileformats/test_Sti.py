@@ -242,6 +242,27 @@ class TestAuxObjectData(unittest.TestCase):
         self.assertEqual(header['number_of_frames'], 5)
         self.assertEqual(header['flags'], 6)
 
+    def test_flags(self):
+        header = AuxObjectData(flags=0)
+
+        header.set_flag('flags', 'FULL_TILE', True)
+        self.assertEqual(header['flags'], 1)
+
+        header.set_flag('flags', 'ANIMATED_TILE', True)
+        self.assertEqual(header['flags'], 3)
+
+        header.set_flag('flags', 'DYNAMIC_TILE', True)
+        self.assertEqual(header['flags'], 7)
+
+        header.set_flag('flags', 'INTERACTIVE_TILE', True)
+        self.assertEqual(header['flags'], 15)
+
+        header.set_flag('flags', 'IGNORES_HEIGHT', True)
+        self.assertEqual(header['flags'], 31)
+
+        header.set_flag('flags', 'USES_LAND_Z', True)
+        self.assertEqual(header['flags'], 63)
+
     def test_write_to_bytes(self):
         header = AuxObjectData(
             wall_orientation=6,
@@ -350,6 +371,12 @@ class TestLoad8BitSti(unittest.TestCase):
             'tile_location_index': 2,
             'current_frame': 0,
             'number_of_frames': 2,
+            'full_tile': False,
+            'animated_tile': True,
+            'dynamic_tile': False,
+            'interactive_tile': False,
+            'ignores_height': False,
+            'uses_land_z': False,
         })
         self.assertEqual(img.images[1].aux_data, {
             'wall_orientation': 0,
@@ -357,6 +384,12 @@ class TestLoad8BitSti(unittest.TestCase):
             'tile_location_index': 2,
             'current_frame': 1,
             'number_of_frames': 0,
+            'full_tile': False,
+            'animated_tile': False,
+            'dynamic_tile': False,
+            'interactive_tile': False,
+            'ignores_height': False,
+            'uses_land_z': False,
         })
 
 
@@ -462,6 +495,12 @@ class TestWrite8BitSti(unittest.TestCase):
             'tile_location_index': 3,
             'current_frame': 4,
             'number_of_frames': 5,
+            'full_tile': True,
+            'animated_tile': True,
+            'dynamic_tile': False,
+            'interactive_tile': False,
+            'ignores_height': False,
+            'uses_land_z': False,
         })
         img2 = SubImage8Bit(Image.new('P', (3, 1), color=0), aux_data={
             'wall_orientation': 6,
@@ -469,6 +508,12 @@ class TestWrite8BitSti(unittest.TestCase):
             'tile_location_index': 8,
             'current_frame': 9,
             'number_of_frames': 10,
+            'full_tile': True,
+            'animated_tile': False,
+            'dynamic_tile': False,
+            'interactive_tile': False,
+            'ignores_height': False,
+            'uses_land_z': False,
         })
         img1.image.putpalette(palette)
         img2.image.putpalette(palette)
@@ -492,5 +537,5 @@ class TestWrite8BitSti(unittest.TestCase):
                          b'\x02\x01\x01\x02\x01\x01' +
                          b'\x83' +
                          # Aux Data
-                         b'\x01\x02\x03\x00' + (3*b'\x00') + b'\x04\x05\x00' + (6*b'\x00') +
-                         b'\x06\x07\x08\x00' + (3*b'\x00') + b'\x09\x0A\x00' + (6*b'\x00'))
+                         b'\x01\x02\x03\x00' + (3*b'\x00') + b'\x04\x05\x03' + (6*b'\x00') +
+                         b'\x06\x07\x08\x00' + (3*b'\x00') + b'\x09\x0A\x01' + (6*b'\x00'))

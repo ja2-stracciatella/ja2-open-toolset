@@ -60,6 +60,10 @@ class TestJa2FileHeader(unittest.TestCase):
         with self.assertRaises(KeyError):
             _ = test_header['non_existing']
 
+    def test_string(self):
+        self.assertEqual(str(TestHeader()), '<TestHeader object>')
+        self.assertEqual(str(TestHeader(item1=1, item3=3)), '<TestHeader object item1=1 item3=3>')
+
     def test_keys(self):
         self.assertEqual(TestHeader.keys(), ['item1', 'item2', 'item3', 'item4'])
 

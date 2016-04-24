@@ -62,6 +62,12 @@ class Ja2FileHeader(object):
         else:
             self[attr] &= ~(1 << self.flags[attr][flag_name])
 
+    def __str__(self):
+        fields_str = ''.join(
+            ' {0}={1}'.format(f[0], self.field_values[f[0]]) for f in self.fields if f[0] in self.field_values
+        )
+        return '<{0} object{1}>'.format(self.__class__.__name__, fields_str)
+
     @staticmethod
     def map_raw_to_attrs(data):
         return data

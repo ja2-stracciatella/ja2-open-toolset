@@ -4,3 +4,6 @@ venv*
 *pycache*
 *.pyc
 *~
+dist
+MANIFEST
+*.egg-info

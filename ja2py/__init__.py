@@ -16,3 +16,5 @@
 # along with JA2 Open Toolset.  If not, see <http://www.gnu.org/licenses/>.
 #
 ##############################################################################
+from . import content, fileformats
+__all__ = ["content", "fileformats"]

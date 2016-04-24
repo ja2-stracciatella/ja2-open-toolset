@@ -2,8 +2,8 @@ import unittest
 from PIL import Image, ImagePalette
 from .fixtures import *
 from ja2py.fileformats import Sti16BitHeader, Sti8BitHeader, StiHeader, StiSubImageHeader, AuxObjectData,\
-                              is_16bit_sti, is_8bit_sti, load_16bit_sti, load_8bit_sti, save_16bit_sti
-from ja2py.content import Image16Bit, Images8Bit
+                              is_16bit_sti, is_8bit_sti, load_16bit_sti, load_8bit_sti, save_16bit_sti, save_8bit_sti
+from ja2py.content import Image16Bit, Images8Bit, SubImage8Bit
 
 
 class TestSti16BitHeader(unittest.TestCase):
@@ -375,12 +375,122 @@ class TestWrite16BitSti(unittest.TestCase):
                                             (b'\x00\xF8' * 3)
 
                          )
+
     def test_write_with_wrong_type(self):
         img = {}
         buffer = BytesIO()
 
         with self.assertRaises(ValueError):
             save_16bit_sti(img, buffer)
+        self.assertEqual(buffer.getvalue(), b'')
 
 
+class TestWrite8BitSti(unittest.TestCase):
+    def test_write_with_wrong_type(self):
+        img = {}
+        buffer = BytesIO()
 
+        with self.assertRaises(ValueError):
+            save_8bit_sti(img, buffer)
+        self.assertEqual(buffer.getvalue(), b'')
+
+    def test_write_with_single_image(self):
+        palette = ImagePalette.ImagePalette('RGB', b'\x01\x01\x01', 3)
+        img = SubImage8Bit(Image.new('P', (2, 2), color=1))
+        img.image.putpalette(palette)
+        imgs = Images8Bit([img], palette=palette)
+        buffer = BytesIO()
+
+        save_8bit_sti(imgs, buffer)
+
+        self.assertEqual(buffer.getvalue(),
+                         # Header
+                         b'STCI\x04\x00\x00\x00\x06\x00\x00\x00' +
+                         b'\x00\x00\x00\x00' + b'\x28\x00\x00\x00' + b'\x02\x00\x02\x00' +
+                         b'\x00\x01\x00\x00\x01\x00\x08\x08\x08\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00' +
+                         b'\x08' + (3 * b'\x00') + b'\x00\x00\x00\x00' + (12 * b'\x00') +
+                         # Palette
+                         b'\x01\x01\x01' + (255 * b'\x00\x00\x00') +
+                         # Sub Image Header
+                         b'\x00\x00\x00\x00' + b'\x06\x00\x00\x00' + b'\x00\x00' + b'\x00\x00' + b'\x02\x00' + b'\x02\x00' +
+                         # Data
+                         b'\x02\x01\x01\x02\x01\x01')
+
+    def test_write_with_multiple_images(self):
+        palette = ImagePalette.ImagePalette('RGB', b'\x01\x01\x01\x02\x02\x02', 6)
+        img1 = SubImage8Bit(Image.new('P', (2, 2), color=1))
+        img2 = SubImage8Bit(Image.new('P', (3, 1), color=0), offsets=(5, 6))
+        img1.image.putpalette(palette)
+        img2.image.putpalette(palette)
+        imgs = Images8Bit([img1, img2], palette=palette)
+        buffer = BytesIO()
+
+        save_8bit_sti(imgs, buffer)
+
+        self.assertEqual(buffer.getvalue(),
+                         # Header
+                         b'STCI\x07\x00\x00\x00\x07\x00\x00\x00' +
+                         b'\x00\x00\x00\x00' + b'\x28\x00\x00\x00' + b'\x03\x00\x03\x00' +
+                         b'\x00\x01\x00\x00\x02\x00\x08\x08\x08\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00' +
+                         b'\x08' + (3 * b'\x00') + b'\x00\x00\x00\x00' + (12 * b'\x00') +
+                         # Palette
+                         b'\x01\x01\x01' + b'\x02\x02\x02' + (254 * b'\x00\x00\x00') +
+                         # Sub Image Header
+                         b'\x00\x00\x00\x00' + b'\x06\x00\x00\x00' + b'\x00\x00' + b'\x00\x00' + b'\x02\x00' + b'\x02\x00' +
+                         b'\x06\x00\x00\x00' + b'\x01\x00\x00\x00' + b'\x05\x00' + b'\x06\x00' + b'\x03\x00' + b'\x01\x00' +
+                         # Data
+                         b'\x02\x01\x01\x02\x01\x01' +
+                         b'\x83')
+
+    def test_write_with_multiple_images_mixed_aux_data(self):
+        palette = ImagePalette.ImagePalette('RGB', b'\x01\x01\x01\x02\x02\x02', 6)
+        img1 = SubImage8Bit(Image.new('P', (2, 2), color=1))
+        img2 = SubImage8Bit(Image.new('P', (3, 1), color=0), offsets=(5, 6), aux_data={})
+        img1.image.putpalette(palette)
+        img2.image.putpalette(palette)
+        imgs = Images8Bit([img1, img2], palette=palette)
+        buffer = BytesIO()
+
+        with self.assertRaises(ValueError):
+            save_8bit_sti(imgs, buffer)
+
+    def test_write_with_multiple_images_with_aux_data(self):
+        palette = ImagePalette.ImagePalette('RGB', b'\x01\x01\x01\x02\x02\x02', 6)
+        img1 = SubImage8Bit(Image.new('P', (2, 2), color=1), aux_data={
+            'wall_orientation': 1,
+            'number_of_tiles': 2,
+            'tile_location_index': 3,
+            'current_frame': 4,
+            'number_of_frames': 5,
+        })
+        img2 = SubImage8Bit(Image.new('P', (3, 1), color=0), aux_data={
+            'wall_orientation': 6,
+            'number_of_tiles': 7,
+            'tile_location_index': 8,
+            'current_frame': 9,
+            'number_of_frames': 10,
+        })
+        img1.image.putpalette(palette)
+        img2.image.putpalette(palette)
+        imgs = Images8Bit([img1, img2], palette=palette)
+        buffer = BytesIO()
+
+        save_8bit_sti(imgs, buffer)
+
+        self.assertEqual(buffer.getvalue(),
+                         # Header
+                         b'STCI\x07\x00\x00\x00\x07\x00\x00\x00' +
+                         b'\x00\x00\x00\x00' + b'\x28\x00\x00\x00' + b'\x03\x00\x03\x00' +
+                         b'\x00\x01\x00\x00\x02\x00\x08\x08\x08\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00' +
+                         b'\x08' + (3 * b'\x00') + b'\x20\x00\x00\x00' + (12 * b'\x00') +
+                         # Palette
+                         b'\x01\x01\x01' + b'\x02\x02\x02' + (254 * b'\x00\x00\x00') +
+                         # Sub Image Header
+                         b'\x00\x00\x00\x00' + b'\x06\x00\x00\x00' + b'\x00\x00' + b'\x00\x00' + b'\x02\x00' + b'\x02\x00' +
+                         b'\x06\x00\x00\x00' + b'\x01\x00\x00\x00' + b'\x00\x00' + b'\x00\x00' + b'\x03\x00' + b'\x01\x00' +
+                         # Data
+                         b'\x02\x01\x01\x02\x01\x01' +
+                         b'\x83' +
+                         # Aux Data
+                         b'\x01\x02\x03\x00' + (3*b'\x00') + b'\x04\x05\x00' + (6*b'\x00') +
+                         b'\x06\x07\x08\x00' + (3*b'\x00') + b'\x09\x0A\x00' + (6*b'\x00'))

@@ -24,7 +24,7 @@ from PIL import Image, ImagePalette
 
 from .common import Ja2FileHeader
 from ..content import Image16Bit, Images8Bit, SubImage8Bit
-from .ETRLE import etrle_decompress
+from .ETRLE import etrle_decompress, etrle_compress
 
 
 class Sti16BitHeader(Ja2FileHeader):
@@ -259,3 +259,80 @@ def save_16bit_sti(ja2_image, file):
             b = pix[2] >> 3
             rgb = b + (g << 6) + (r << 11)
             file.write(struct.pack('<H', rgb))
+
+
+def _sub_image_to_bytes(sub_image):
+    width = sub_image.image.size[0]
+    height = sub_image.image.size[1]
+    compressed_buffer = io.BytesIO()
+    uncompressed_data = sub_image.image.tobytes()
+
+    for i in range(height):
+        compressed_buffer.write(etrle_compress(uncompressed_data[i*width:(i+1)*width]))
+    return compressed_buffer.getvalue()
+
+
+def save_8bit_sti(ja2_images, file):
+    if not isinstance(ja2_images, Images8Bit):
+        raise ValueError('Input needs to be of type Images8Bit')
+
+    aux_data = list(i.aux_data for i in ja2_images.images if i.aux_data is not None)
+    if len(aux_data) != 0 and not len(aux_data) == len(ja2_images):
+        raise ValueError('Either all or none of the sub_images needs to have aux_data to save')
+
+    palette_bytes = ja2_images.palette.tobytes().ljust(256 * 3, b'\x00')
+
+    initial_size = sum(i.image.size[0] * i.image.size[1] for i in ja2_images.images)
+    compressed_images = list(_sub_image_to_bytes(s) for s in ja2_images.images)
+    compressed_image_sizes = list(len(i) for i in compressed_images)
+    offsets = list(sum(compressed_image_sizes[:i]) for i in range(len(compressed_images)))
+    size_after_compression = sum(compressed_image_sizes)
+    sub_image_headers = list(
+        StiSubImageHeader(
+            offset=offset,
+            length=comp_size,
+            offset_x=sub.offsets[0],
+            offset_y=sub.offsets[1],
+            height=sub.image.size[0],
+            width=sub.image.size[1]
+        )
+        for sub, comp_size, offset in zip(ja2_images.images, compressed_image_sizes, offsets)
+    )
+
+    format_specific_header = Sti8BitHeader(
+        number_of_palette_colors=256,
+        number_of_images=len(ja2_images),
+        red_color_depth=8,
+        green_color_depth=8,
+        blue_color_depth=8
+    )
+    header = StiHeader(
+        file_identifier=b'STCI',
+        initial_size=initial_size,
+        size_after_compression=size_after_compression,
+        transparent_color=0,
+        width=max(i.image.size[0] for i in ja2_images.images),
+        height=sum(i.image.size[1] for i in ja2_images.images),
+        format_specific_header=bytes(format_specific_header),
+        color_depth=8,
+        aux_data_size=len(aux_data) * AuxObjectData.get_size(),
+        flags=0
+    )
+    header.set_flag('flags', 'INDEXED', True)
+    header.set_flag('flags', 'ETRLE', True)
+
+    file.write(bytes(header))
+    file.write(palette_bytes)
+    for sub_image_header in sub_image_headers:
+        file.write(bytes(sub_image_header))
+    for compressed in compressed_images:
+        file.write(compressed)
+    for aux in aux_data:
+        file.write(bytes(AuxObjectData(
+            wall_orientation=aux['wall_orientation'],
+            number_of_tiles=aux['number_of_tiles'],
+            tile_location_index=aux['tile_location_index'],
+            current_frame=aux['current_frame'],
+            number_of_frames=aux['number_of_frames'],
+            flags=0
+        )))

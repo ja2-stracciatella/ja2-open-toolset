@@ -8,7 +8,8 @@ Alliance 2 game resources. Currently this is implemented only by a small Python 
 ## Features
 
 - Read and Write `.SLF` archives
-- Reading STI files
+- Read and Write `.STI` files
+- Read `.GAP` files
 
 ## Installing
 

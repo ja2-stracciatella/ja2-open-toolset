@@ -28,7 +28,7 @@ import json
 sys.path.append(os.getcwd())
 
 from ja2py.fileformats import SlfFS, Sti, is_8bit_sti, is_16bit_sti, load_8bit_sti, load_16bit_sti, load_gap
-from sti_to_png import write_8bit_png_from_sti, write_24bit_png_from_sti, write_sequence_of_8bit_images_to_target_directory
+from sti_to_png import write_8bit_png_from_sti, write_24bit_png_from_sti
 
 
 def dump_file(output_folder, file_path, slf_fs, args):
@@ -55,10 +55,11 @@ def dump_sti(output_folder, file_path, slf_fs, args):
             os.makedirs(to_dir)
         if is_8bit_sti(file):
             sti = load_8bit_sti(file)
-            write_8bit_png_from_sti(to_path, sti, args.normalize)
+            to_path = os.path.splitext(to_path)[0] + '.STI' if len(sti.images) > 1 else os.path.splitext(to_path)[0] + '.png'
+            write_8bit_png_from_sti(to_path, sti, verbose=args.verbose)
         elif is_16bit_sti(file):
             sti = load_16bit_sti(file)
-            write_24bit_png_from_sti(to_path, sti)
+            write_24bit_png_from_sti(to_path, sti, verbose=args.verbose)
 
 
 def dump_gap(output_folder, file_path, slf_fs, args):
@@ -106,13 +107,6 @@ def main():
         '--output-folder',
         default=None,
         help="folder for extracted files.  By default, files extracted alongside the slf file in a subdirector called Dump."
-    )
-    parser.add_argument(
-        '-n',
-        '--normalize',
-        action='store_true',
-        default=False,
-        help="make all images inside an animated STI have the same size and display the same positional content"
     )
     parser.add_argument(
         '-v',

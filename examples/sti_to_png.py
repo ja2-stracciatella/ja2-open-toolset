@@ -27,20 +27,24 @@ sys.path.append(os.getcwd())
 
 from ja2py.fileformats.Sti import load_8bit_sti, load_16bit_sti, is_8bit_sti, is_16bit_sti
 
+def write_image(output_file, image, transparency=0, verbose=False):
+    if verbose:
+        print("Writing:  {}".format(output_file))
+    image.save(output_file, transparency=transparency)
 
-def write_sequence_of_8bit_images_to_target_directory(sequence, target_directory):
+def write_sequence_of_8bit_images_to_target_directory(sequence, target_directory, verbose=False):
     for image_index, sub_image in enumerate(sequence):
         image_file = os.path.join(target_directory, '{}.png'.format(image_index))
-        sub_image.image.save(image_file, transparency=0)
+        write_image(image_file, sub_image.image, verbose=verbose)
 
 
-def write_24bit_png_from_sti(output_file, sti):
-    return sti.image.save(output_file)
+def write_24bit_png_from_sti(output_file, sti, verbose=False):
+    return write_image(output_file, sti.image, transparency=None, verbose=verbose)
 
 
-def write_8bit_png_from_sti(output_file, sti, normalize):
+def write_8bit_png_from_sti(output_file, sti, verbose=False):
     if len(sti.images) > 1:
-        base_dir = os.path.splitext(output_file)[0] + '.STI'
+        base_dir = output_file
         if not os.path.exists(base_dir):
             os.makedirs(base_dir)
 
@@ -49,11 +53,11 @@ def write_8bit_png_from_sti(output_file, sti, normalize):
                 animation_dir = os.path.join(base_dir, 'ANI{}'.format(i))
                 if not os.path.exists(animation_dir):
                     os.makedirs(animation_dir)
-                write_sequence_of_8bit_images_to_target_directory(animation, animation_dir)
+                write_sequence_of_8bit_images_to_target_directory(animation, animation_dir, verbose=verbose)
         else:
-            write_sequence_of_8bit_images_to_target_directory(sti.images, base_dir)
+            write_sequence_of_8bit_images_to_target_directory(sti.images, base_dir, verbose=verbose)
     else:
-        sti.images[0].image.save(output_file, transparency=0)
+        write_image(output_file, sti.images[0].image, verbose=verbose)
 
 
 def main():
@@ -64,13 +68,6 @@ def main():
         '--output-file',
         default=None,
         help="output file for converted STI. For animated files this will be used as a base for numerated files. By default the file(s) will be named the same as the STI file."
-    )
-    parser.add_argument(
-        '-n',
-        '--normalize',
-        action='store_true',
-        default=False,
-        help="make all images inside an animated STI have the same size and display the same positional content"
     )
     parser.add_argument(
         '-v',
@@ -86,7 +83,7 @@ def main():
     sti_file = os.path.normpath(os.path.abspath(sti_file))
 
     output_file = args.output_file
-    if output_file:
+    if not output_file:
         output_file = os.path.join(os.path.dirname(sti_file),
                                    os.path.splitext(os.path.basename(sti_file))[0] + '.png')
     output_file = os.path.expanduser(os.path.expandvars(output_file))
@@ -106,20 +103,21 @@ def main():
                 for i, sub_image in enumerate(sti.images):
                     print("Subimage {}: Size {}x{}, Shift +{}+{}".format(
                         i+1,
-                        sub_image.width,
-                        sub_image.height,
-                        sub_image.offset_x,
-                        sub_image.offset_y
+                        sub_image.image.size[0],
+                        sub_image.image.size[1],
+                        sub_image.offsets[0],
+                        sub_image.offsets[1]
                     ))
-            write_8bit_png_from_sti(output_file, sti, args.normalize)
-        if is_16bit_sti(file):
+            write_8bit_png_from_sti(output_file, sti, verbose=args.verbose)
+        elif is_16bit_sti(file):
             sti = load_16bit_sti(file)
             if args.verbose:
                 print("File Details: ")
                 print("Data Type: RGB 16bit")
-                write_24bit_png_from_sti(output_file, sti)
+                write_24bit_png_from_sti(output_file, sti, verbose=args.verbose)
 
-        print("Done")
+        if args.verbose:
+            print("Done")
 
 if __name__ == "__main__":
     main()

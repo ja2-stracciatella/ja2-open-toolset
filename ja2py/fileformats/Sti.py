@@ -467,30 +467,21 @@ class StiImagePlugin(ImageFile.ImageFile):
         """
         The main image size of indexed images seems to be the canvas size.
         STIconvert.cc has code to generate subimages by processing wall indexes (WI=255)
-        This horizontal layout might be compatible (needs testing).
+        At least one official STI image can't fit all subimages in the canvas, so this function resizes the image.
         """
-        if len(subimage_headers) == 1:
-            # single image, no padding
-            subimage = subimage_headers[0]
-            return [(0, 0, subimage['width'], subimage['height'])]
-        # multiple images, add a 1 pixel border
+        assert len(subimage_headers) > 0, "TODO 0 subimages" # XXX need example
         boxes = []
-        width, height = self.size
-        x0 = 1
-        y0 = 1
+        width = 0
+        height = 0
         for subimage in subimage_headers:
-            while y0 < height:
-                # to the right
-                x1 = x0 + subimage['width']
-                y1 = y0 + subimage['height']
-                if x1 < width and y1 < height:
-                    break
-                # then at the start of the next line
-                x0 = 1
-                y0 = 1 + max([box[3] for box in boxes])
-            assert y0 < height, "TODO can't place subimage" # XXX maybe this strategy isn't good?
-            boxes.append((x0, y0, x1, y1))
-            x0 = x1 + 1
+            if width > 0:
+                width += 1 # 1 pixel vertical line between images
+            box = (width, 0, width + subimage['width'], subimage['height'])
+            boxes.append(box)
+            width += subimage['width']
+            if height < subimage['height']:
+                height = subimage['height']
+        self.size = width, height
         return boxes
 
 

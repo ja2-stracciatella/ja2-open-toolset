@@ -20,7 +20,7 @@
 import os
 import io
 import struct
-from PIL import Image, ImagePalette
+from PIL import Image, ImageFile, ImagePalette
 
 from .common import Ja2FileHeader
 from ..content import Image16Bit, Images8Bit, SubImage8Bit
@@ -69,6 +69,7 @@ class StiHeader(Ja2FileHeader):
 
     flags = {
         'flags': {
+            'AUX_OBJECT_DATA': 0,
             'RGB': 2,
             'INDEXED': 3,
             'ZLIB': 4,
@@ -378,3 +379,226 @@ def save_8bit_sti(ja2_images, file):
         aux_header.set_flag('flags', 'IGNORES_HEIGHT', aux['ignores_height'])
         aux_header.set_flag('flags', 'USES_LAND_Z', aux['uses_land_z'])
         file.write(bytes(aux_header))
+
+
+def _color_components(color, masks):
+    def component(color, mask):
+        if mask == 0:
+            return 0xFF # defaults to white/opaque
+        byte = color & mask
+        shift = 8 - mask.bit_length()
+        if shift > 0:
+            return byte << shift
+        elif shift < 0:
+            return byte >> -shift
+        return byte
+    components = [component(color, mask) for mask in masks]
+    return tuple(components)
+
+
+class StiImagePlugin(ImageFile.ImageFile):
+    """Image plugin for Pillow/PIL that can load STI files."""
+
+    format = "STCI"
+    format_description = "Sir-Tech's Crazy Image"
+
+    def _open(self):
+        """Reads file information without image data."""
+        self.fp.seek(0, 0) # from start
+        header = StiHeader.from_bytes(self.fp.read(StiHeader.get_size()))
+        if header['file_identifier'] != b'STCI':
+            raise SyntaxError('not a STCI file')
+        assert not header.get_flag('flags', 'ZLIB'), "TODO ZLIB compression" # XXX need example
+        self.size = (header['width'], header['height'])
+        if header.get_flag('flags', 'RGB'):
+            # raw color image
+            assert not header.get_flag('flags', 'INDEXED'), "RGB and INDEXED at the same time"
+            assert not header.get_flag('flags', 'AUX_OBJECT_DATA'), "TODO aux object data in RGB" # XXX need example
+            rgb_header = Sti16BitHeader.from_bytes(header['format_specific_header'])
+            assert rgb_header['alpha_channel_mask'] == 0, "TODO alpha channel in RGB" # XXX need example
+            self.mode = 'RGB'
+            depth = header['color_depth']
+            masks = ( rgb_header['red_color_mask'], rgb_header['green_color_mask'], rgb_header['blue_color_mask'] )
+            self.tile = [ # single image
+                (self.format, (0, 0) + self.size, StiHeader.get_size(), ('rgb', depth, masks, header['size_after_compression']))
+            ]
+            self.info['header'] = header
+            self.info['rgb_header'] = rgb_header
+            self.info['boxes'] = [(0, 0) + self.size]
+            self.info["transparency"] = _color_components(header['transparent_color'], masks)
+        elif header.get_flag('flags', 'INDEXED'):
+            # palette color image
+            indexed_header = Sti8BitHeader.from_bytes(header['format_specific_header'])
+            assert indexed_header['number_of_palette_colors'] == 256
+            assert indexed_header['red_color_depth'] == 8
+            assert indexed_header['green_color_depth'] == 8
+            assert indexed_header['blue_color_depth'] == 8
+            num_bytes = indexed_header['number_of_palette_colors'] * 3
+            raw = struct.unpack('<{}B'.format(num_bytes), self.fp.read(num_bytes))
+            self.mode = 'P'
+            self.palette = ImagePalette.ImagePalette("RGB", raw[0::3] + raw[1::3] + raw[2::3])
+            self.palette.dirty = True
+            subimage_headers = [StiSubImageHeader.from_bytes(self.fp.read(StiSubImageHeader.get_size())) for _ in range(indexed_header['number_of_images'])]
+            boxes = self._generate_boxes(subimage_headers)
+            offset = self.fp.tell()
+            if header.get_flag('flags', 'AUX_OBJECT_DATA'):
+                self.fp.seek(header['size_after_compression'], 1) # from current
+                aux_object_data = [AuxObjectData.from_bytes(self.fp.read(AuxObjectData.get_size())) for _ in range(indexed_header['number_of_images'])]
+                self.info['aux_object_data'] = aux_object_data
+            self.tile = [
+                (self.format, (0, 0) + self.size, offset, ('fill', header['transparent_color'])) # XXX wall index is another possibility
+            ]
+            for box, subimage in zip(boxes, subimage_headers):
+                if header.get_flag('flags', 'ETRLE'):
+                    parameters = ('etrle', subimage['length'], header['transparent_color']) # etrle indexes
+                else:
+                    parameters = ('copy', subimage['length']) # raw indexes
+                tile = (self.format, box, offset + subimage['offset'], parameters)
+                self.tile.append(tile)
+            self.info['header'] = header
+            self.info['indexed_header'] = indexed_header
+            self.info['subimage_headers'] = subimage_headers
+            self.info['boxes'] = boxes
+            self.info["transparency"] = header['transparent_color']
+        else:
+            raise SyntaxError('unknown image mode')
+
+    def _generate_boxes(self, subimage_headers):
+        """
+        The main image size of indexed images seems to be the canvas size.
+        STIconvert.cc has code to generate subimages by processing wall indexes (WI=255)
+        This horizontal layout might be compatible (needs testing).
+        """
+        if len(subimage_headers) == 1:
+            # single image, no padding
+            subimage = subimage_headers[0]
+            return [(0, 0, subimage['width'], subimage['height'])]
+        # multiple images, add a 1 pixel border
+        boxes = []
+        width, height = self.size
+        x0 = 1
+        y0 = 1
+        for subimage in subimage_headers:
+            while y0 < height:
+                # to the right
+                x1 = x0 + subimage['width']
+                y1 = y0 + subimage['height']
+                if x1 < width and y1 < height:
+                    break
+                # then at the start of the next line
+                x0 = 1
+                y0 = 1 + max([box[3] for box in boxes])
+            assert y0 < height, "TODO can't place subimage" # XXX maybe this strategy isn't good?
+            boxes.append((x0, y0, x1, y1))
+            x0 = x1 + 1
+        return boxes
+
+
+class StiImageDecoder(ImageFile.PyDecoder):
+    """Decoder for images in a STI file."""
+
+    def init(self, args):
+        do = args[0]
+        if do == 'rgb':
+            self.decode = self.decode_rgb
+            self.depth = args[1]
+            self.masks = args[2]
+            self.bytes = args[3]
+            assert self.mode == 'RGB' and len(self.masks) == 3, "TODO rgb mode {} {}".format(self.mode, self.masks) # XXX RGBA?
+            assert self.depth in [16], "TODO color depth {}".format(self.depth) # XXX due to the size of the masks the maximum is 32
+            assert isinstance(self.bytes, int) and self.bytes >= 0
+        elif do == 'fill':
+            self.decode = self.decode_fill
+            self.color = args[1]
+        elif do == 'copy':
+            self.decode = self.decode_copy
+            self.bytes = args[1]
+            assert self.mode == "P"
+            assert isinstance(self.bytes, int) and self.bytes >= 0
+        elif do == 'etrle':
+            self.decode = self.decode_etrle
+            self.bytes = args[1]
+            self.transparent = args[2]
+            self.data = bytearray()
+            assert self.mode == "P"
+            assert isinstance(self.bytes, int) and self.bytes >= 0
+            assert isinstance(self.transparent, int) and self.transparent == 0 # XXX etrle_decompress expects index 0
+        else:
+            raise NotImplementedError("unsupported args {}".format(args))
+        self.x = 0
+        self.y = 0
+
+    def positions(self):
+        """iterates over all positions"""
+        while self.y < self.state.ysize:
+            while self.x < self.state.xsize:
+                yield self.x + self.state.xoff, self.y + self.state.yoff
+                self.x += 1
+            self.y += 1
+            self.x = 0
+
+    def decode(self, buffer):
+        raise NotImplementedError("placeholder")
+
+    def decode_rgb(self, buffer):
+        """copy colors"""
+        assert self.depth == 16
+        offset = 0
+        pixels = self.im.pixel_access()
+        for x, y in self.positions():
+            assert self.bytes >= 2, "not enough data"
+            if offset + 2 > len(buffer):
+                return offset, 0 # get more data
+            color = struct.unpack_from("<H", buffer, offset)[0]
+            pixels[x, y] = _color_components(color, self.masks)
+            offset += 2
+            self.bytes -= 2
+        assert self.bytes == 0, "too much data"
+        return -1, 0 # done
+
+    def decode_fill(self, buffer):
+        """fill with color"""
+        pixels = self.im.pixel_access()
+        for x, y in self.positions():
+            pixels[x, y] = self.color
+        return -1, 0 # done
+
+    def decode_copy(self, buffer):
+        """copy raw indexes"""
+        offset = 0
+        pixels = self.im.pixel_access()
+        for x, y in self.positions():
+            if offset == len(buffer):
+                return offset, 0 # get more data
+            assert self.bytes > 0, "not enough data"
+            pixels[x, y] = buffer[offset]
+            offset += 1
+            self.bytes -= 1
+        assert self.bytes == 0, "too much data"
+        return -1, 0 # done
+
+    def decode_etrle(self, buffer):
+        """copy etrle indexes"""
+        if self.bytes > 0:
+            bytes = min(self.bytes, len(buffer))
+            self.data.extend(buffer[:self.bytes])
+            self.bytes -= bytes
+            if self.bytes > 0:
+                return len(buffer), 0 # get more data
+        self.data = etrle_decompress(self.data)
+        offset = 0
+        pixels = self.im.pixel_access()
+        for x, y in self.positions():
+            assert offset < len(self.data), "not enough data"
+            pixels[x, y] = self.data[offset]
+            offset += 1
+        assert offset == len(self.data), "too much data"
+        self.data = None
+        return -1, 0 # done
+
+
+# register STI image plugin
+Image.register_decoder(StiImagePlugin.format, StiImageDecoder)
+Image.register_open(StiImagePlugin.format, StiImagePlugin, lambda x: len(x) >= 4 and x[:4] == b'STCI')
+Image.register_extension(StiImagePlugin.format, '.sti')
+

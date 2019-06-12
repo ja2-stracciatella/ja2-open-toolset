@@ -650,7 +650,8 @@ class StiImagePlugin(ImageFile.ImageFile):
                         a = 0
                     elif semi_transparent == 'opaque':
                         a = 255
-                    raise ValueError("semi transparent color found, to auto-convert you can set 'semi_transparent' to 'transparent' or 'opaque'")
+                    else:
+                        raise ValueError("semi transparent color found, to auto-convert you can set 'semi_transparent' to 'transparent' or 'opaque' {}".format(color))
                 if a == 0:
                     data.append(0) # transparent
                 else:

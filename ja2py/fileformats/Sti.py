@@ -457,7 +457,19 @@ def validate_flags(flags):
 
 
 class StiImagePlugin(ImageFile.ImageFile):
-    """Image plugin for Pillow that can load STI files."""
+    """
+    Image plugin for Pillow that can load STI files.
+
+    Images can be RGB or INDEXED.
+    INDEXED images can be encoded with ETRLE.
+
+    The meaning of ETRLE is unknown.
+    It is a run-length encoding applied to the indexes of each line of an image.
+    It uses control bytes, which contain a length in the 7 lower bits.
+    Each line ends with a control byte that has length 0.
+    Sequences of up to 127 indexes equal to 0 are compressed into 1 control byte that has the high bit set to 1.
+    Other sequences of up to 127 indexes are prefixed with 1 control byte that has the high bit set to 0.
+    """
 
     format = 'STCI'
     format_description = "Sir-Tech's Crazy Image"
@@ -657,10 +669,12 @@ class StiImagePlugin(ImageFile.ImageFile):
                 else:
                     data.append(palette.getcolor(rgb))
             indexed.append(bytes(data))
-        if 'ETRLE' in flags: # compress indexes
-            compressed = [etrle_compress(data) for data in indexed]
-        else:
-            compressed = indexed
+        compressed = []
+        for i in range(num_images):
+            img = Image.new('P', images[i].size)
+            img.putpalette(palette)
+            img.putdata(indexed[i])
+            compressed.append(img.tobytes(StiImagePlugin.format, 'ETRLE' in flags)) # uses StiImageDecoder
         offset = 0
         image_headers = []
         for i in range(num_images):
@@ -997,7 +1011,12 @@ class PyEncoder(object):
 
 
 class StiImageEncoder(PyEncoder):
-    """Encoder for images in a STI file."""
+    """
+    Encoder for images in a STI file.
+
+    Encodes RGB and RGBA images with any valid spec.
+    Encodes P images with ETRLE or raw.
+    """
 
     # List of rawmodes supported by Pillow's raw_encoder.
     # Assumes mode RGBA when there is an A band, and mode RGB otherwise.
@@ -1026,12 +1045,17 @@ class StiImageEncoder(PyEncoder):
                 self.mode = 'RGBA' # force alpha
             self.y = None
             self.x = None
+        elif self.mode in ['P']:
+            self.etrle = args[0]
+            self.bytes = bytearray()
+            self.x = 0
+            self.y = 0
         else:
             raise NotImplementedError("mode %r" % self.mode)
 
     def encode(self, bufsize=16384):
         """
-        Override to encode data to a new buffer limited by bufsize.
+        Encode data to a new buffer limited by bufsize.
         If errcode is 0, there is more data to encode.
 
         :param bufsize: Optional buffer size.
@@ -1039,6 +1063,19 @@ class StiImageEncoder(PyEncoder):
             Positive errcode means it is done.
             Negative errcode means an error from `ImageFile.ERRORS` occured.
         """
+        if self.mode in ['RGB', 'RGBA']:
+            return self._encode_colors(bufsize)
+        elif self.mode in ['P']:
+            if self.etrle:
+                return self._encode_indexes_with_etrle(bufsize)
+            else:
+                return self._encode_indexes(bufsize)
+        else:
+            raise NotImplementedError("mode %r" % self.mode)
+
+    def _encode_colors(self, bufsize):
+        """Encode colors according to the spec."""
+        assert self.mode in ['RGB', 'RGBA']
         if self.im.mode != self.mode:
             self.im = self.im.convert(self.mode)
         if self.rawmode in self.RAWMODES:
@@ -1046,7 +1083,7 @@ class StiImageEncoder(PyEncoder):
                 self.rawencoder = Image._getencoder(self.mode, 'raw', (self.rawmode))
                 self.rawencoder.setimage(self.im.im, self.state.extents())
             return self.rawencoder.encode(bufsize)
-        pixel_access = self.im.load()
+        pixel_access = self.im.pixel_access()
         buffer = bytearray()
         depth = self.spec[8]
         x0, y0, x1, y1 = self.state.extents()
@@ -1060,7 +1097,74 @@ class StiImageEncoder(PyEncoder):
                 data = _color_bytes(color, self.spec)
                 buffer.extend(data)
             self.x = None
-        return len(buffer), 1, buffer
+        return len(buffer), 1, buffer # done
+
+    def _encode_indexes(self, bufsize):
+        """Copy palette indexes."""
+        assert self.mode == 'P'
+        assert self.im.mode == 'P'
+        pixel_access = self.im.pixel_access()
+        buffer = bytearray()
+        x0, y0, x1, y1 = self.state.extents()
+        for y in range(self.y or y0, y1):
+            for x in range(self.x or x0, x1):
+                if bufsize <= len(buffer):
+                    self.y = y
+                    self.x = x
+                    return len(buffer), 0, buffer # there is more data
+                index = pixel_access[x, y]
+                buffer.append(index)
+            self.x = None
+        return len(buffer), 1, buffer # done
+
+    def _encode_indexes_with_etrle(self, bufsize):
+        """Encode palette indexes with ETRLE."""
+        pixel_access = self.im.pixel_access()
+        buffer = bytearray()
+        x0, y0, x1, y1 = self.state.extents()
+        for y in range(self.y or y0, y1):
+            if len(self.bytes) > bufsize:
+                buffer = bytes(self.bytes[:bufsize])
+                self.bytes = self.bytes[bufsize:]
+                self.y = y
+                return len(buffer), 0, buffer # there is more data
+            # process a complete line
+            line = bytearray()
+            for x in range(x0, x1):
+                index = pixel_access[x, y]
+                line.append(index)
+            while len(line) > 0:
+                control = 0 # uncompressed
+                n = len(line)
+                for i in range(1,n):
+                    # lone 0's that can increase the size are left uncompressed
+                    if line[i] != 0 or (line[i-1] != 0 and i+1 != n):
+                        continue
+                    if i == 1: # [0, 0, ...]
+                        control = 0x80 # compressed
+                        for i in range(2,n):
+                            if i == 0x7f or line[i] != 0:
+                                n = i
+                                break
+                    break
+                else:
+                    if n > 0x7f:
+                        n = 0x7f
+                # encode
+                assert control in [0, 0x80]
+                assert n >= 1 and n <= 0x7f
+                self.bytes.append(control | n)
+                if control == 0:
+                    self.bytes.extend(line[:n])
+                line = line[n:]
+            self.bytes.append(0) # end of line, control with length 0
+        if len(self.bytes) > bufsize:
+            buffer = bytes(self.bytes[:bufsize])
+            self.bytes = self.bytes[bufsize:]
+            return len(buffer), 0, buffer # there is more data
+        buffer = bytes(self.bytes)
+        self.bytes = self.bytes[len(self.bytes):]
+        return len(buffer), 1, buffer # done
 
 
 # register STI image plugin

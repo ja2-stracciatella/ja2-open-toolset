@@ -745,3 +745,15 @@ class TestStiImageEncoder(unittest.TestCase):
             assert False, "too many encode cycles"
         self.assertEqual(have, want)
 
+    def test_not_implemented(self):
+        data = [0]
+        img = Image.new('P', (1, 1))
+        img.putdata(data)
+        with self.assertRaises(NotImplementedError):
+            img.tobytes(StiImagePlugin.format, 'not_implemented')
+        encoder = Image._getencoder('P', StiImagePlugin.format, 'indexes')
+        encoder.setimage(img.im)
+        encoder.do = 'not_implemented' # override 'indexes'
+        with self.assertRaises(NotImplementedError):
+            encoder.encode()
+

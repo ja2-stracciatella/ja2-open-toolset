@@ -635,6 +635,25 @@ class TestStiImageEncoder(unittest.TestCase):
         img.putdata(data)
         self.assertEqual(img.tobytes(StiImagePlugin.format, 'indexes'), bytes)
 
+    def test_indexes_small_bufsize(self):
+        data = [1, 2,
+                3, 4]
+        want = [b'\x01', b'\x02',
+                b'\x03', b'\x04']
+        img = Image.new('P', (2, 2))
+        img.putdata(data)
+        have = []
+        encoder = Image._getencoder('P', StiImagePlugin.format, 'indexes')
+        encoder.setimage(img.im)
+        for i in range(4):
+            n, errcode, buffer = encoder.encode(1)
+            have.append(buffer)
+            if errcode > 0:
+                break
+        else:
+            assert False, "too many encode cycles"
+        self.assertEqual(have, want)
+
     def test_etrle(self):
         data = [1, 2,
                 3, 4]

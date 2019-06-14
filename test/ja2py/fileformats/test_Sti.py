@@ -4,7 +4,7 @@ from .fixtures import *
 from ja2py.fileformats import Sti16BitHeader, Sti8BitHeader, StiHeader, StiSubImageHeader, AuxObjectData,\
                               is_16bit_sti, is_8bit_sti, load_16bit_sti, load_8bit_sti, save_16bit_sti, save_8bit_sti
 from ja2py.content import Image16Bit, Images8Bit, SubImage8Bit
-from ja2py.fileformats.Sti import StiImagePlugin
+from ja2py.fileformats.Sti import StiImagePlugin, StiImageEncoder
 
 
 class TestSti16BitHeader(unittest.TestCase):
@@ -606,6 +606,7 @@ class TestStiImageEncoder(unittest.TestCase):
               + b'\x06\x07\x08\x09\x0a\x0b'
         img = Image.new('RGB', (2, 2))
         img.putdata(data)
+        self.assertIn('RGB', StiImageEncoder.RAWMODES)
         self.assertEqual(img.tobytes(StiImagePlugin.format, 'colors', 'RGB'), bytes)
 
     def test_colors_force_alpha(self):
@@ -635,7 +636,7 @@ class TestStiImageEncoder(unittest.TestCase):
         img = Image.new('RGBA', (2, 2))
         img.putdata(data)
         have = []
-        encoder = Image._getencoder('RGBA', StiImagePlugin.format, 'colors', (spec,))
+        encoder = StiImageEncoder('RGBA', 'colors', spec)
         encoder.setimage(img.im)
         for i in range(len(want)):
             n, errcode, buffer = encoder.encode(1)
@@ -663,7 +664,7 @@ class TestStiImageEncoder(unittest.TestCase):
         img = Image.new('P', (2, 2))
         img.putdata(data)
         have = []
-        encoder = Image._getencoder('P', StiImagePlugin.format, 'indexes')
+        encoder = StiImageEncoder('P', 'indexes')
         encoder.setimage(img.im)
         for i in range(len(want)):
             n, errcode, buffer = encoder.encode(1)
@@ -734,7 +735,7 @@ class TestStiImageEncoder(unittest.TestCase):
         img = Image.new('P', (2, 2))
         img.putdata(data)
         have = []
-        encoder = Image._getencoder('P', StiImagePlugin.format, 'etrle')
+        encoder = StiImageEncoder('P', 'etrle')
         encoder.setimage(img.im)
         for i in range(len(want)):
             n, errcode, buffer = encoder.encode(2)
@@ -751,7 +752,7 @@ class TestStiImageEncoder(unittest.TestCase):
         img.putdata(data)
         with self.assertRaises(NotImplementedError):
             img.tobytes(StiImagePlugin.format, 'not_implemented')
-        encoder = Image._getencoder('P', StiImagePlugin.format, 'indexes')
+        encoder = StiImageEncoder('P', 'indexes')
         encoder.setimage(img.im)
         encoder.do = 'not_implemented' # override 'indexes'
         with self.assertRaises(NotImplementedError):

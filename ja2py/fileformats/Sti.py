@@ -1051,6 +1051,7 @@ class StiImageEncoder(PyEncoder):
                 self.mode = 'RGB' # force no alpha
             else:
                 self.mode = 'RGBA' # force alpha
+            self.bytes = bytearray()
             self.y = None
             self.x = None
         elif self.do == 'indexes':
@@ -1094,19 +1095,28 @@ class StiImageEncoder(PyEncoder):
                 self.rawencoder.setimage(self.im, self.state.extents())
             return self.rawencoder.encode(bufsize)
         pixel_access = self.im.pixel_access()
-        buffer = bytearray()
         depth = self.spec[8]
         x0, y0, x1, y1 = self.state.extents()
         for y in range(self.y or y0, y1):
             for x in range(self.x or x0, x1):
-                if (bufsize - len(buffer)) * 8 < depth:
+                if len(self.bytes) > bufsize:
                     self.y = y
                     self.x = x
+                    buffer = bytes(self.bytes[:bufsize])
+                    self.bytes = self.bytes[bufsize:]
                     return len(buffer), 0, buffer # there is more data
                 color = pixel_access[x, y]
                 data = _color_bytes(color, self.spec)
-                buffer.extend(data)
+                self.bytes.extend(data)
             self.x = None
+        else:
+            self.y = y1
+        if len(self.bytes) > bufsize:
+            buffer = bytes(self.bytes[:bufsize])
+            self.bytes = self.bytes[bufsize:]
+            return len(buffer), 0, buffer # there is more data
+        buffer = bytes(self.bytes)
+        self.bytes = self.bytes[:0]
         return len(buffer), 1, buffer # done
 
     def _encode_indexes(self, bufsize):

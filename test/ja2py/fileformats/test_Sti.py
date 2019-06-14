@@ -635,7 +635,7 @@ class TestStiImageEncoder(unittest.TestCase):
         img = Image.new('RGBA', (2, 2))
         img.putdata(data)
         have = []
-        encoder = Image._getencoder('RGBA', StiImagePlugin.format, 'colors', spec,)
+        encoder = Image._getencoder('RGBA', StiImagePlugin.format, 'colors', (spec,))
         encoder.setimage(img.im)
         for i in range(len(want)):
             n, errcode, buffer = encoder.encode(1)

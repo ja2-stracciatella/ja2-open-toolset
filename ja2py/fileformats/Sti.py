@@ -1178,6 +1178,8 @@ class StiImageEncoder(PyEncoder):
                     self.bytes.extend(line[:n])
                 line = line[n:]
             self.bytes.append(0) # end of line, control with length 0
+        else:
+            self.y = y1
         if len(self.bytes) > bufsize:
             buffer = bytes(self.bytes[:bufsize])
             self.bytes = self.bytes[bufsize:]

@@ -570,6 +570,44 @@ class TestWrite8BitSti(unittest.TestCase):
                          b'\x06\x07\x08\x00' + (3*b'\x00') + b'\x09\x0A\x01' + (6*b'\x00'))
 
 
+class TestStiImagePlugin(unittest.TestCase):
+    def test_load_save_rgb(self):
+        rgb_header = Sti16BitHeader(
+            red_color_mask=0x0000ff,
+            green_color_mask=0x00ff00,
+            blue_color_mask=0xff0000,
+            alpha_channel_mask=0x000000,
+            red_color_depth=8,
+            green_color_depth=8,
+            blue_color_depth=8,
+            alpha_channel_depth=0
+        )
+        header = StiHeader(
+            file_identifier=b'STCI',
+            initial_size=3,
+            size_after_compression=3,
+            transparent_color=0,
+            flags=0,
+            height=1,
+            width=1,
+            format_specific_header=bytes(rgb_header),
+            color_depth=24,
+            aux_data_size=0,
+        )
+        header.set_flag('flags', 'RGB', True)
+        data = bytes(header) + b'\x01\x02\x03'
+        buf = BytesIO(data)
+        img = Image.open(buf)
+        self.assertEqual(img.mode, 'RGB')
+        self.assertEqual(img.size, (1, 1))
+        self.assertEqual(img.getpixel((0, 0)), (1,2,3))
+        self.assertEqual(bytes(img.info['header']), bytes(header))
+        self.assertEqual(bytes(img.info['rgb_header']), bytes(rgb_header))
+        buf = BytesIO()
+        img.save(buf, format=StiImagePlugin.format, flags=['RGB'], spec='RGB')
+        self.assertEqual(buf.getvalue(), data)
+
+
 class TestStiImageEncoder(unittest.TestCase):
     def test_colors_official_spec(self):
         data = [(0x00,0x00,0x00), (0xff,0xff,0xff),

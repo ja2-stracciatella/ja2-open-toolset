@@ -608,6 +608,24 @@ class TestStiImageEncoder(unittest.TestCase):
         img.putdata(data)
         self.assertEqual(img.tobytes(StiImagePlugin.format, 'colors', 'RGB'), bytes)
 
+    def test_colors_force_alpha(self):
+        data = [(0,1,2), (3,4,5),
+                (6,7,8), (9,10,11)]
+        bytes = b'\x00\x01\x02\xff\x03\x04\x05\xff'\
+              + b'\x06\x07\x08\xff\x09\x0a\x0b\xff'
+        img = Image.new('RGB', (2, 2))
+        img.putdata(data)
+        self.assertEqual(img.tobytes(StiImagePlugin.format, 'colors', 'RGBA'), bytes)
+
+    def test_colors_force_no_alpha(self):
+        data = [(0,1,2,255), (3,4,5,200),
+                (6,7,8,100), (9,10,11,0)]
+        bytes = b'\x00\x01\x02\x03\x04\x05'\
+              + b'\x06\x07\x08\x09\x0a\x0b'
+        img = Image.new('RGBA', (2, 2))
+        img.putdata(data)
+        self.assertEqual(img.tobytes(StiImagePlugin.format, 'colors', 'RGB'), bytes)
+
     def test_indexes(self):
         data = [1, 2,
                 3, 4]

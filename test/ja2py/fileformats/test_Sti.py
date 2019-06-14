@@ -4,6 +4,7 @@ from .fixtures import *
 from ja2py.fileformats import Sti16BitHeader, Sti8BitHeader, StiHeader, StiSubImageHeader, AuxObjectData,\
                               is_16bit_sti, is_8bit_sti, load_16bit_sti, load_8bit_sti, save_16bit_sti, save_8bit_sti
 from ja2py.content import Image16Bit, Images8Bit, SubImage8Bit
+from ja2py.fileformats.Sti import StiImagePlugin
 
 
 class TestSti16BitHeader(unittest.TestCase):
@@ -567,3 +568,104 @@ class TestWrite8BitSti(unittest.TestCase):
                          # Aux Data
                          b'\x01\x02\x03\x00' + (3*b'\x00') + b'\x04\x05\x03' + (6*b'\x00') +
                          b'\x06\x07\x08\x00' + (3*b'\x00') + b'\x09\x0A\x01' + (6*b'\x00'))
+
+
+class TestStiImageEncoder(unittest.TestCase):
+    def test_colors_official_spec(self):
+        data = [(0x00,0x00,0x00), (0xff,0xff,0xff),
+                (0x07,0x03,0x07), (0xf8,0xfc,0xf8)]
+        bytes = b'\x00\x00\xff\xff'\
+              + b'\x00\x00\xff\xff'
+        img = Image.new('RGB', (2, 2))
+        img.putdata(data)
+        self.assertEqual(img.tobytes(StiImagePlugin.format, 'colors', 'BGR;16'), bytes)
+
+    def test_colors_default_spec(self):
+        data = [(0x00,0x00,0x00), (0xff,0xff,0xff),
+                (0x07,0x03,0x07), (0xf8,0xfc,0xf8)]
+        bytes = b'\x00\x00\xff\xff'\
+              + b'\x00\x00\xff\xff'
+        img = Image.new('RGB', (2, 2))
+        img.putdata(data)
+        self.assertEqual(img.tobytes(StiImagePlugin.format, 'colors', None), bytes) # 'BGR;16'
+
+    def test_colors_custom_spec(self):
+        data = [(0x00,0x00,0x00,0x00), (0xff,0xff,0xff,0xff),
+                (0x3f,0x3f,0x3f,0x3f), (0xc0,0xc0,0xc0,0xc0)]
+        bytes = b'\x00\xff'\
+              + b'\x00\xff'
+        spec = (0x03,0x30,0x0c,0xc0, 2,2,2,2, 8)
+        img = Image.new('RGBA', (2, 2))
+        img.putdata(data)
+        self.assertEqual(img.tobytes(StiImagePlugin.format, 'colors', spec), bytes)
+
+    def test_colors_raw_encoder(self):
+        data = [(0,1,2), (3,4,5),
+                (6,7,8), (9,10,11)]
+        bytes = b'\x00\x01\x02\x03\x04\x05'\
+              + b'\x06\x07\x08\x09\x0a\x0b'
+        img = Image.new('RGB', (2, 2))
+        img.putdata(data)
+        self.assertEqual(img.tobytes(StiImagePlugin.format, 'colors', 'RGB'), bytes)
+
+    def test_indexes(self):
+        data = [1, 2,
+                3, 4]
+        bytes = b'\x01\x02'\
+              + b'\x03\x04'
+        img = Image.new('P', (2, 2))
+        img.putdata(data)
+        self.assertEqual(img.tobytes(StiImagePlugin.format, 'indexes'), bytes)
+
+    def test_etrle(self):
+        data = [1, 2,
+                3, 4]
+        bytes = b'\x02\x01\x02\x00'\
+              + b'\x02\x03\x04\x00'
+        img = Image.new('P', (2, 2))
+        img.putdata(data)
+        self.assertEqual(img.tobytes(StiImagePlugin.format, 'etrle'), bytes)
+
+    def test_etrle_all_0s(self):
+        data = [0, 0,
+                0, 0]
+        bytes = b'\x82\x00'\
+              + b'\x82\x00'
+        img = Image.new('P', (2, 2))
+        img.putdata(data)
+        self.assertEqual(img.tobytes(StiImagePlugin.format, 'etrle'), bytes)
+
+    def test_etrle_lone_0s(self):
+        data = [0, 1, 2,
+                3, 0, 4,
+                5, 6, 0]
+        bytes = b'\x03\x00\x01\x02\x00'\
+              + b'\x03\x03\x00\x04\x00'\
+              + b'\x02\x05\x06\x81\x00'
+        img = Image.new('P', (3, 3))
+        img.putdata(data)
+        self.assertEqual(img.tobytes(StiImagePlugin.format, 'etrle'), bytes)
+
+    def test_etrle_length_limit_with_0s(self):
+        data = [0] * 130
+        bytes = b'\xff\x83\x00'
+        img = Image.new('P', (130, 1))
+        img.putdata(data)
+        self.assertEqual(img.tobytes(StiImagePlugin.format, 'etrle'), bytes)
+
+    def test_etrle_length_limit_with_1s(self):
+        data = [1] * 130
+        bytes = b'\x7f' + b'\x01' * 127 + b'\x03' + b'\x01' * 3 + b'\x00'
+        img = Image.new('P', (130, 1))
+        img.putdata(data)
+        self.assertEqual(img.tobytes(StiImagePlugin.format, 'etrle'), bytes)
+
+    def test_etrle_transitions(self):
+        data = [0, 0, 1, 1, 0, 0,
+                2, 2, 0, 0, 3, 3]
+        bytes = b'\x82\x02\x01\x01\x82\x00'\
+              + b'\x02\x02\x02\x82\x02\x03\x03\x00'
+        img = Image.new('P', (6, 2))
+        img.putdata(data)
+        self.assertEqual(img.tobytes(StiImagePlugin.format, 'etrle'), bytes)
+

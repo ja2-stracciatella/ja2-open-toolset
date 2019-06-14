@@ -575,10 +575,10 @@ class StiImagePlugin(ImageFile.ImageFile):
             raise NotImplementedError("RGB and ZLIB")
         if 'AUX_OBJECT_DATA' in flags:
             raise NotImplementedError("RGB and AUX_OBJECT_DATA")
-        encoder = StiImageEncoder('RGB', im.encoderinfo.get('spec'))
+        encoder = StiImageEncoder('RGB', 'colors', im.encoderinfo.get('spec'))
         spec = encoder.spec
         validate_spec(spec)
-        encoder.setimage(im)
+        encoder.setimage(im.im)
         encoder.setfd(fd)
         fd.seek(StiHeader.get_size(), 0) # from start
         num_bytes, errcode = encoder.encode_to_pyfd()
@@ -670,11 +670,14 @@ class StiImagePlugin(ImageFile.ImageFile):
                     data.append(palette.getcolor(rgb))
             indexed.append(bytes(data))
         compressed = []
+        do = 'indexes'
+        if 'ETRLE' in flags:
+            do = 'etrle'
         for i in range(num_images):
             img = Image.new('P', images[i].size)
             img.putpalette(palette)
             img.putdata(indexed[i])
-            compressed.append(img.tobytes(StiImagePlugin.format, 'ETRLE' in flags)) # uses StiImageDecoder
+            compressed.append(img.tobytes(StiImagePlugin.format, do)) # uses StiImageEncoder
         offset = 0
         image_headers = []
         for i in range(num_images):
@@ -1014,8 +1017,11 @@ class StiImageEncoder(PyEncoder):
     """
     Encoder for images in a STI file.
 
-    Encodes RGB and RGBA images with any valid spec.
-    Encodes P images with ETRLE or raw.
+    ```
+    img.tobytes(StiImagePlugin.format, 'colors', spec) # defaults to official spec
+    img.tobytes(StiImagePlugin.format, 'indexes')
+    img.tobytes(StiImagePlugin.format, 'etrle')
+    ```
     """
 
     # List of rawmodes supported by Pillow's raw_encoder.
@@ -1029,8 +1035,10 @@ class StiImageEncoder(PyEncoder):
     ]
 
     def init(self, args):
-        if self.mode in ['RGB', 'RGBA']:
-            self.spec = args[0] or OFFICIAL_RGB_SPEC # default spec
+        self.do = args[0]
+        if self.do == 'colors':
+            assert self.mode in ['RGB', 'RGBA']
+            self.spec = args[1] or OFFICIAL_RGB_SPEC # default spec
             if isinstance(self.spec, str):
                 self.rawmode = self.spec
                 self.spec = rawmode_to_spec(self.rawmode)
@@ -1045,13 +1053,17 @@ class StiImageEncoder(PyEncoder):
                 self.mode = 'RGBA' # force alpha
             self.y = None
             self.x = None
-        elif self.mode in ['P']:
-            self.etrle = args[0]
+        elif self.do == 'indexes':
+            assert self.mode in ['P']
+            self.x = None
+            self.y = None
+        elif self.do == 'etrle':
+            assert self.mode in ['P']
             self.bytes = bytearray()
-            self.x = 0
-            self.y = 0
+            self.x = None
+            self.y = None
         else:
-            raise NotImplementedError("mode %r" % self.mode)
+            raise NotImplementedError("do %r" % self.do)
 
     def encode(self, bufsize=16384):
         """
@@ -1063,25 +1075,23 @@ class StiImageEncoder(PyEncoder):
             Positive errcode means it is done.
             Negative errcode means an error from `ImageFile.ERRORS` occured.
         """
-        if self.mode in ['RGB', 'RGBA']:
+        if self.do == 'colors':
             return self._encode_colors(bufsize)
-        elif self.mode in ['P']:
-            if self.etrle:
-                return self._encode_indexes_with_etrle(bufsize)
-            else:
-                return self._encode_indexes(bufsize)
-        else:
-            raise NotImplementedError("mode %r" % self.mode)
+        elif self.do == 'indexes':
+            return self._encode_indexes(bufsize)
+        elif self.do == 'etrle':
+            return self._encode_etrle(bufsize)
+        raise NotImplementedError("do %r" % self.do)
 
     def _encode_colors(self, bufsize):
         """Encode colors according to the spec."""
         assert self.mode in ['RGB', 'RGBA']
         if self.im.mode != self.mode:
-            self.im = self.im.convert(self.mode)
+            self.im = self.im.copy().convert(self.mode)
         if self.rawmode in self.RAWMODES:
             if self.rawencoder is None:
                 self.rawencoder = Image._getencoder(self.mode, 'raw', (self.rawmode))
-                self.rawencoder.setimage(self.im.im, self.state.extents())
+                self.rawencoder.setimage(self.im, self.state.extents())
             return self.rawencoder.encode(bufsize)
         pixel_access = self.im.pixel_access()
         buffer = bytearray()
@@ -1117,8 +1127,10 @@ class StiImageEncoder(PyEncoder):
             self.x = None
         return len(buffer), 1, buffer # done
 
-    def _encode_indexes_with_etrle(self, bufsize):
+    def _encode_etrle(self, bufsize):
         """Encode palette indexes with ETRLE."""
+        assert self.mode == 'P'
+        assert self.im.mode == 'P'
         pixel_access = self.im.pixel_access()
         buffer = bytearray()
         x0, y0, x1, y1 = self.state.extents()
@@ -1138,18 +1150,26 @@ class StiImageEncoder(PyEncoder):
                 n = len(line)
                 for i in range(1,n):
                     # lone 0's that can increase the size are left uncompressed
-                    if line[i] != 0 or (line[i-1] != 0 and i+1 != n):
+                    if line[i] != 0:
+                        continue
+                    if line[i-1] != 0:
+                        if i+1 == n:
+                            n -= 1 # uncompressed length, next cycle is compressed (lone 0 at the end)
+                            break
                         continue
                     if i == 1: # [0, 0, ...]
                         control = 0x80 # compressed
                         for i in range(2,n):
-                            if i == 0x7f or line[i] != 0:
+                            if line[i] != 0:
                                 n = i
                                 break
+                    else:
+                        n = i-1 # uncompressed length, next cycle is compressed
                     break
                 else:
-                    if n > 0x7f:
-                        n = 0x7f
+                    if n == 1 and line[0] == 0:
+                        control = 0x80 # compressed, lone 0 at the end
+                n = min(n, 0x7f) # respect maximum length
                 # encode
                 assert control in [0, 0x80]
                 assert n >= 1 and n <= 0x7f

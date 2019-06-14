@@ -626,6 +626,26 @@ class TestStiImageEncoder(unittest.TestCase):
         img.putdata(data)
         self.assertEqual(img.tobytes(StiImagePlugin.format, 'colors', 'RGB'), bytes)
 
+    def test_colors_small_bufsize(self):
+        data = [(0x00,0x00,0x00,0x00), (0xff,0xff,0xff,0xff),
+                (0x0f,0x0f,0x0f,0x0f), (0xf0,0xf0,0xf0,0xf0)]
+        want = [b'\x00', b'\x00', b'\xff', b'\xff',
+                b'\x00', b'\x00', b'\xff', b'\xff']
+        spec = (0x000f,0xf000,0x00f0,0x0f00, 4,4,4,4, 16)
+        img = Image.new('RGBA', (2, 2))
+        img.putdata(data)
+        have = []
+        encoder = Image._getencoder('RGBA', StiImagePlugin.format, 'colors', spec,)
+        encoder.setimage(img.im)
+        for i in range(len(want)):
+            n, errcode, buffer = encoder.encode(1)
+            have.append(buffer)
+            if errcode > 0:
+                break
+        else:
+            assert False, "too many encode cycles"
+        self.assertEqual(have, want)
+
     def test_indexes(self):
         data = [1, 2,
                 3, 4]
@@ -645,7 +665,7 @@ class TestStiImageEncoder(unittest.TestCase):
         have = []
         encoder = Image._getencoder('P', StiImagePlugin.format, 'indexes')
         encoder.setimage(img.im)
-        for i in range(4):
+        for i in range(len(want)):
             n, errcode, buffer = encoder.encode(1)
             have.append(buffer)
             if errcode > 0:
@@ -716,7 +736,7 @@ class TestStiImageEncoder(unittest.TestCase):
         have = []
         encoder = Image._getencoder('P', StiImagePlugin.format, 'etrle')
         encoder.setimage(img.im)
-        for i in range(4):
+        for i in range(len(want)):
             n, errcode, buffer = encoder.encode(2)
             have.append(buffer)
             if errcode > 0:

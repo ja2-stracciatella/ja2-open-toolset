@@ -1018,7 +1018,7 @@ class StiImageEncoder(PyEncoder):
     Encoder for images in a STI file.
 
     ```
-    img.tobytes(StiImagePlugin.format, 'colors', spec) # defaults to official spec
+    img.tobytes(StiImagePlugin.format, 'colors', (spec,)) # defaults to official spec
     img.tobytes(StiImagePlugin.format, 'indexes')
     img.tobytes(StiImagePlugin.format, 'etrle')
     ```

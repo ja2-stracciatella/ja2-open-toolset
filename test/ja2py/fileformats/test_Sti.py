@@ -571,7 +571,7 @@ class TestWrite8BitSti(unittest.TestCase):
 
 
 class TestStiImagePlugin(unittest.TestCase):
-    def test_load_save_rgb(self):
+    def test_open_save_colors(self):
         rgb_header = Sti16BitHeader(
             red_color_mask=0x0000ff,
             green_color_mask=0x00ff00,
@@ -595,9 +595,11 @@ class TestStiImagePlugin(unittest.TestCase):
             aux_data_size=0,
         )
         header.set_flag('flags', 'RGB', True)
-        data = bytes(header) + b'\x01\x02\x03'
+        image_data = b'\x01\x02\x03'
+        data = bytes(header) + image_data
         buf = BytesIO(data)
         img = Image.open(buf)
+        self.assertEqual(img.format, StiImagePlugin.format)
         self.assertEqual(img.mode, 'RGB')
         self.assertEqual(img.size, (1, 1))
         self.assertEqual(img.getpixel((0, 0)), (1,2,3))
@@ -606,6 +608,146 @@ class TestStiImagePlugin(unittest.TestCase):
         buf = BytesIO()
         img.save(buf, format=StiImagePlugin.format, flags=['RGB'], spec='RGB')
         self.assertEqual(buf.getvalue(), data)
+
+    def test_open_save_colors_custom_spec_with_alpha(self):
+        spec = (0x03,0xc0,0x0c,0x30, 2,2,2,2, 8)
+        rgb_header = Sti16BitHeader(
+            red_color_mask = spec[0],
+            green_color_mask = spec[1],
+            blue_color_mask = spec[2],
+            alpha_channel_mask = spec[3],
+            red_color_depth = spec[4],
+            green_color_depth = spec[5],
+            blue_color_depth = spec[6],
+            alpha_channel_depth = spec[7],
+        )
+        header = StiHeader(
+            file_identifier = b'STCI',
+            initial_size = spec[8] // 8,
+            size_after_compression = spec[8] // 8,
+            transparent_color = 0,
+            flags = 0,
+            height = 1,
+            width = 1,
+            format_specific_header = bytes(rgb_header),
+            color_depth = spec[8],
+            aux_data_size = 0,
+        )
+        header.set_flag('flags', 'RGB', True)
+        image_data = b'\x8d'
+        data = bytes(header) + image_data
+        buf = BytesIO(data)
+        img = Image.open(buf)
+        self.assertEqual(img.format, StiImagePlugin.format)
+        self.assertEqual(img.mode, 'RGBA')
+        self.assertEqual(img.size, (1, 1))
+        self.assertEqual(img.getpixel((0, 0)), (1<<6,2<<6,3<<6,0<<6))
+        self.assertEqual(bytes(img.info['header']), bytes(header))
+        self.assertEqual(bytes(img.info['rgb_header']), bytes(rgb_header))
+        buf = BytesIO()
+        img.save(buf, format=StiImagePlugin.format, flags=['RGB'], spec=spec)
+        self.assertEqual(buf.getvalue(), data)
+
+    def test_open_save_indexes(self):
+        indexed_header = Sti8BitHeader(
+            number_of_palette_colors = 256,
+            number_of_images = 0,
+            red_color_depth = 8,
+            green_color_depth = 8,
+            blue_color_depth = 8
+        )
+        header = StiHeader(
+            file_identifier = b'STCI',
+            initial_size = 1,
+            size_after_compression = 1,
+            transparent_color = 0,
+            flags = 0,
+            height = 1,
+            width = 1,
+            format_specific_header = bytes(indexed_header),
+            color_depth = 8,
+            aux_data_size = 0,
+        )
+        header.set_flag('flags', 'INDEXED', True)
+        palette_colors = bytes([i for i in range(256) for _ in range(3)])
+        palette_bands = bytes([i for _ in range(3) for i in range(256)])
+        image_data = b'\x01'
+        data = bytes(header) + palette_colors + image_data
+        img = Image.open(BytesIO(data))
+        self.assertEqual(img.format, StiImagePlugin.format)
+        self.assertEqual(img.mode, 'P')
+        self.assertEqual(palette_bands, img.palette.tobytes()) # Pillow returns bands
+        self.assertEqual(img.size, (1, 1))
+        self.assertEqual(img.getpixel((0, 0)), 1)
+        self.assertEqual(bytes(img.info['header']), bytes(header))
+        self.assertEqual(bytes(img.info['indexed_header']), bytes(indexed_header))
+        buf = BytesIO()
+        img.save(buf, format=StiImagePlugin.format, flags=['INDEXED'])
+        self.assertEqual(buf.getvalue(), data)
+
+    def test_open_save_etrle(self):
+        indexed_header = Sti8BitHeader(
+            number_of_palette_colors=256,
+            number_of_images=1,
+            red_color_depth=8,
+            green_color_depth=8,
+            blue_color_depth=8
+        )
+        header = StiHeader(
+            file_identifier=b'STCI',
+            initial_size=1,
+            size_after_compression=2,
+            transparent_color=0,
+            flags=0,
+            height=1,
+            width=1,
+            format_specific_header=bytes(indexed_header),
+            color_depth=8,
+            aux_data_size=0,
+        )
+        header.set_flag('flags', 'INDEXED', True)
+        header.set_flag('flags', 'ETRLE', True)
+        palette_colors = bytes([i for i in range(256) for _ in range(3)])
+        palette_bands = bytes([i for _ in range(3) for i in range(256)])
+        subimage_data = b'\x81\x00'
+        subimage_header = StiSubImageHeader(
+            offset = 0,
+            length = len(subimage_data),
+            offset_x = 0,
+            offset_y = 0,
+            height = 1,
+            width = 1,
+        )
+        data = bytes(header) + palette_colors + bytes(subimage_header) + subimage_data
+        img = Image.open(BytesIO(data))
+        self.assertEqual(img.format, StiImagePlugin.format)
+        self.assertEqual(img.mode, 'P')
+        self.assertEqual(palette_bands, img.palette.tobytes())
+        self.assertEqual(img.size, (1, 1))
+        self.assertEqual(img.getpixel((0, 0)), 0)
+        self.assertEqual(bytes(img.info['header']), bytes(header))
+        self.assertEqual(bytes(img.info['indexed_header']), bytes(indexed_header))
+        buf = BytesIO()
+        img.save(buf, format=StiImagePlugin.format, flags=['INDEXED', 'ETRLE'])
+        print(data)
+        print(buf.getvalue())
+        self.assertEqual(buf.getvalue(), data)
+
+    def test_save_all_open_etrle(self):
+        img1 = Image.new('RGB', (1,1))
+        img1.putpixel((0,0), (1,2,3))
+        img2 = Image.new('RGB', (1,1))
+        img2.putpixel((0,0), (3,2,1))
+        buf = BytesIO()
+        img1.save(buf, format=StiImagePlugin.format, save_all=True, append_images=[img2])
+        sti = Image.open(buf)
+        self.assertEqual(sti.mode, 'P') # INDEXED ETRLE
+        # XXX composite image, will probably change in the future
+        self.assertEqual(sti.size, (3,1))
+        self.assertEqual(len(sti.info['boxes']), 2)
+        for box, original in zip(sti.info['boxes'], [img1, img2]):
+            img = sti.crop(box).convert(original.mode)
+            self.assertEqual(list(img.getdata()), list(original.getdata()))
 
 
 class TestStiImageEncoder(unittest.TestCase):

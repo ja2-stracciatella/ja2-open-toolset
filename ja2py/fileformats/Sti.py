@@ -514,27 +514,33 @@ class StiImagePlugin(ImageFile.ImageFile):
             self.mode = 'P'
             self.palette = ImagePalette.ImagePalette("RGB", raw[0::3] + raw[1::3] + raw[2::3])
             self.palette.dirty = True
-            subimage_headers = [StiSubImageHeader.from_bytes(self.fp.read(StiSubImageHeader.get_size())) for _ in range(indexed_header['number_of_images'])]
-            boxes = self._generate_boxes(subimage_headers)
-            offset = self.fp.tell()
-            if header.get_flag('flags', 'AUX_OBJECT_DATA'):
-                self.fp.seek(header['size_after_compression'], 1) # from current
-                aux_object_data = [AuxObjectData.from_bytes(self.fp.read(AuxObjectData.get_size())) for _ in range(indexed_header['number_of_images'])]
-                self.info['aux_object_data'] = aux_object_data
-            self.tile = [
-                (self.format, (0, 0) + self.size, offset, ('fill', [header['transparent_color']])) # XXX wall index is another possibility
-            ]
-            for box, subimage in zip(boxes, subimage_headers):
-                if header.get_flag('flags', 'ETRLE'):
-                    parameters = ('etrle', header['transparent_color'], subimage['length']) # etrle indexes
-                else:
-                    parameters = ('indexes', subimage['length']) # raw indexes
-                tile = (self.format, box, offset + subimage['offset'], parameters)
-                self.tile.append(tile)
+            if header.get_flag('flags', 'ETRLE'): # etrle encoded indexes, multiple subimages
+                # TODO open subimages as frames instead of composing an image?
+                num_images = indexed_header['number_of_images']
+                assert num_images > 0, "TODO 0 etrle subimages" # XXX need example
+                subimage_headers = [StiSubImageHeader.from_bytes(self.fp.read(StiSubImageHeader.get_size())) for _ in range(num_images)]
+                boxes = self._generate_boxes(subimage_headers)
+                offset = self.fp.tell()
+                self.tile = [
+                    (self.format, (0, 0) + self.size, offset, ('fill', [header['transparent_color']])) # XXX wall index is another possibility
+                ]
+                for box, subimage in zip(boxes, subimage_headers):
+                    parameters = ('etrle', header['transparent_color'], subimage['length'])
+                    tile = (self.format, box, offset + subimage['offset'], parameters)
+                    self.tile.append(tile)
+                self.info['boxes'] = boxes
+                self.info['subimage_headers'] = subimage_headers
+                if header.get_flag('flags', 'AUX_OBJECT_DATA'):
+                    self.fp.seek(header['size_after_compression'], 1) # from current
+                    aux_object_data = [AuxObjectData.from_bytes(self.fp.read(AuxObjectData.get_size())) for _ in range(num_images)]
+                    self.info['aux_object_data'] = aux_object_data
+            else: # raw indexes
+                assert not header.get_flag('flags', 'AUX_OBJECT_DATA'), "TODO INDEXED and AUX_OBJECT_DATA without ETRLE" # XXX need example
+                self.tile = [
+                    (self.format, (0, 0) + self.size, self.fp.tell(), ('indexes', header['width'] * header['height']))
+                ]
             self.info['header'] = header
             self.info['indexed_header'] = indexed_header
-            self.info['subimage_headers'] = subimage_headers
-            self.info['boxes'] = boxes
             self.info["transparency"] = header['transparent_color']
         else:
             raise SyntaxError('unknown image mode')
@@ -561,24 +567,24 @@ class StiImagePlugin(ImageFile.ImageFile):
         return boxes
 
     @staticmethod
-    def _save_rgb_image(im, fd):
+    def _save_colors_image(img, fd):
         """
-        Data in dictionary `im.encoderinfo`:
+        Data in dictionary `img.encoderinfo`:
 
-         * flags - (list) list of flags, 'RGB' is required
-         * spec  - (spec) rawmode string or spec, default is determined by StiImageEncoder, examples in RAWMODE_SPEC
+         * flags - (list) list of flags, requires flag 'RGB'
+         * spec  - (spec) optional rawmode string or spec, default is determined by StiImageEncoder, examples in RAWMODE_SPEC
         """
-        flags = im.encoderinfo['flags']
+        flags = img.encoderinfo['flags']
         validate_flags(flags)
         assert 'RGB' in flags
-        if 'ZLIB' in flags:
-            raise NotImplementedError("RGB and ZLIB")
-        if 'AUX_OBJECT_DATA' in flags:
-            raise NotImplementedError("RGB and AUX_OBJECT_DATA")
-        encoder = StiImageEncoder('RGB', 'colors', im.encoderinfo.get('spec'))
+        assert 'INDEXED' not in flags
+        assert 'ETRLE' not in flags
+        assert 'ZLIB' not in flags # XXX needs example
+        assert 'AUX_OBJECT_DATA' not in flags # XXX needs example
+        encoder = StiImageEncoder('RGB', 'colors', img.encoderinfo.get('spec'))
         spec = encoder.spec
         validate_spec(spec)
-        encoder.setimage(im.im)
+        encoder.setimage(img.im)
         encoder.setfd(fd)
         fd.seek(StiHeader.get_size(), 0) # from start
         num_bytes, errcode = encoder.encode_to_pyfd()
@@ -595,7 +601,7 @@ class StiImagePlugin(ImageFile.ImageFile):
             blue_color_depth = spec[6],
             alpha_channel_depth = spec[7]
         )
-        width, height = im.size
+        width, height = img.size
         color_depth = spec[8]
         header = StiHeader(
             file_identifier = b'STCI',
@@ -615,41 +621,101 @@ class StiImagePlugin(ImageFile.ImageFile):
         fd.write(bytes(header))
 
     @staticmethod
-    def _save_indexed_images(im, fd):
+    def _save_indexes_image(img, fd):
         """
-        Data in dictionary `im.encoderinfo`:
+        Data in dictionary `img.encoderinfo`:
+
+         * flags - (list) list of flags
+         * transparent - (list) optional transparent palette index, default: 0
+        """
+        flags = img.encoderinfo['flags']
+        validate_flags(flags)
+        assert 'INDEXED' in flags
+        assert 'ETRLE' not in flags
+        assert 'RGB' not in flags
+        assert 'ZLIB' not in flags # XXX needs example
+        assert 'AUX_OBJECT_DATA' not in flags # XXX needs example
+        transparent = img.encoderinfo.get('transparent', 0) # XXX maybe ETRLE only?
+        assert isinstance(transparent, int), "transparent %r" % transparent
+        assert img.mode in ['P']
+        assert img.palette is not None
+        # write image data
+        fd.seek(StiHeader.get_size(), 0) # from start
+        data = img.palette.tobytes() # rgb bands
+        assert len(data) == 256 * 3
+        data = [x for i in range(256) for x in data[i::256]] # rgb colors
+        fd.write(bytes(data))
+        encoder = StiImageEncoder('P', 'indexes')
+        encoder.setimage(img.im)
+        encoder.setfd(fd)
+        num_bytes, errcode = encoder.encode_to_pyfd()
+        if errcode < 0:
+            raise IOError("encoder error %d when writing INDEXED sti image file" % errcode)
+        fd.truncate()
+        # write header
+        indexed_header = Sti8BitHeader(
+            number_of_palette_colors = 256,
+            number_of_images = 0, # XXX assuming ETRLE only
+            red_color_depth = 8,
+            green_color_depth = 8,
+            blue_color_depth = 8
+        )
+        width, height = img.size
+        header = StiHeader(
+            file_identifier = b'STCI',
+            initial_size = num_bytes,
+            size_after_compression = num_bytes,
+            transparent_color = transparent,
+            width = width,
+            height = height,
+            format_specific_header = bytes(indexed_header),
+            color_depth = 8,
+            aux_data_size = 0,
+            flags = 0
+        )
+        for flag in flags:
+            header.set_flag('flags', flag, True)
+        fd.seek(0, 0) # from start
+        fd.write(bytes(header))
+
+    @staticmethod
+    def _save_etrle_images(img, fd):
+        """
+        Data in dictionary `img.encoderinfo`:
 
          * flags - (list) list of flags, 'INDEXED' is required
          * append_images - (list) optional list of extra images, default: []
-         * transparent - (list) optional RGB transparent color , default: None
+         * transparent - (list) optional transparent RGB color , default: None
          * semi_transparent - (str) optional string indicating how to handle semi transparent pixels, default: None
            * 'transparent': make them transparent
            * 'opaque': make them opaque
          * offsets - (list) list of (x,y) offsets for each image, default: [], missing offsets default to (0,0)
-         * aux_object_data - (list) optional list of AuxObjectData, default: [], missing data defaults to AuxObjectData(), only written with flag 'AUX_OBJECT_DATA'
+         * aux_object_data - (list) optional list of AuxObjectData, default: [], missing data defaults to AuxObjectData(), re   uires flag 'AUX_OBJECT_DATA'
         """
-        flags = im.encoderinfo['flags']
+        flags = img.encoderinfo['flags']
         validate_flags(flags)
         assert 'INDEXED' in flags
-        if 'ZLIB' in flags:
-            raise NotImplementedError("INDEXED and ZLIB")
-        images = [im] + im.encoderinfo.get('append_images', [])
+        assert 'ETRLE' in flags
+        assert 'RGB' not in flags
+        assert 'ZLIB' not in flags # XXX needs example
+        images = [img] + img.encoderinfo.get('append_images', [])
         num_images = len(images)
-        transparent = im.encoderinfo.get('transparent')
+        transparent = img.encoderinfo.get('transparent')
         assert transparent is None or len(transparent) == 3, "transparent %r" % transparent
-        semi_transparent = im.encoderinfo.get('semi_transparent')
+        semi_transparent = img.encoderinfo.get('semi_transparent')
         assert semi_transparent in [None, 'transparent', 'opaque'], "semi_transparent %r" % semi_transparent
-        offsets = im.encoderinfo.get('offsets', [])
+        offsets = img.encoderinfo.get('offsets', [])
         assert isinstance(offsets, Iterable), "offsets %r" % offsets
         if num_images > len(offsets):
             offsets += [None] * (num_images - len(offsets))
-        aux_object_data = im.encoderinfo.get('aux_object_data', [])
+        aux_object_data = img.encoderinfo.get('aux_object_data', [])
         assert isinstance(aux_object_data, Iterable), "aux_object_data %r" % aux_object_data
         if num_images > len(aux_object_data):
             aux_object_data += [None] * (num_images - len(aux_object_data))
-        # convert to a shared palette # XXX etrle_compress assumes index 0 is transparent
+        # convert images to a shared palette
         palette = ImagePalette.ImagePalette()
-        assert palette.getcolor(transparent or (0, 0, 0)) == 0, "transparent index"
+        index = palette.getcolor(transparent or (0, 0, 0))
+        assert index == 0 # XXX assuming index 0 is transparent
         indexed = []
         for img in images:
             data = bytearray()
@@ -663,36 +729,46 @@ class StiImagePlugin(ImageFile.ImageFile):
                     elif semi_transparent == 'opaque':
                         a = 255
                     else:
-                        raise ValueError("semi transparent color found, to auto-convert you can set 'semi_transparent' to 'transparent' or 'opaque' {}".format(color))
+                        raise ValueError("semi transparent color found, set `semi_transparent` to 'transparent' or 'opaque' {}".format(color))
                 if a == 0:
                     data.append(0) # transparent
                 else:
                     data.append(palette.getcolor(rgb))
             indexed.append(bytes(data))
+        # write image data
+        fd.seek(StiHeader.get_size(), 0) # from start
+        palette_bands = palette.tobytes()
+        assert len(palette_bands) == 256 * 3
+        palette_colors = bytes([x for i in range(256) for x in palette_bands[i::256]])
+        fd.write(palette_colors)
         compressed = []
-        do = 'indexes'
-        if 'ETRLE' in flags:
-            do = 'etrle'
+        offset = 0
         for i in range(num_images):
             img = Image.new('P', images[i].size)
             img.putpalette(palette)
             img.putdata(indexed[i])
-            compressed.append(img.tobytes(StiImagePlugin.format, do)) # uses StiImageEncoder
-        offset = 0
-        image_headers = []
-        for i in range(num_images):
-            x, y = offsets[i] or (0, 0) # default offset
-            w, h = images[i].size
-            image_header = StiSubImageHeader(
+            data = img.tobytes(StiImagePlugin.format, 'etrle') # uses StiImageEncoder
+            offset_x, offset_y = offsets[i] or (0, 0) # default offset
+            width, height = images[i].size
+            subimage_header = StiSubImageHeader(
                 offset = offset,
-                length = len(compressed[i]),
-                offset_x = x,
-                offset_y = y,
-                height = h,
-                width = w
+                length = len(data),
+                offset_x = offset_x,
+                offset_y = offset_y,
+                height = height,
+                width = width
             )
-            image_headers.append(image_header)
-            offset += len(compressed[i])
+            fd.write(bytes(subimage_header))
+            compressed.append(data)
+            offset += len(data)
+        for data in compressed:
+            fd.write(data)
+        aux_data_size = 0
+        if 'AUX_OBJECT_DATA' in flags:
+            data = b"".join([bytes(x or AuxObjectData()) for x in aux_object_data[:num_images]])
+            aux_data_size = len(data)
+            fd.write(data)
+        fd.truncate()
         indexed_header = Sti8BitHeader(
             number_of_palette_colors = 256,
             number_of_images = num_images,
@@ -700,17 +776,17 @@ class StiImagePlugin(ImageFile.ImageFile):
             green_color_depth = 8,
             blue_color_depth = 8
         )
-        w, h = im.size
+        width, height = img.size
         header = StiHeader(
             file_identifier = b'STCI',
             initial_size = sum([len(x) for x in indexed]),
-            size_after_compression = sum([len(x) for x in compressed]),
-            transparent_color = 0,
-            width = w,
-            height = h,
+            size_after_compression = offset,
+            transparent_color = 0, # XXX assuming palette index 0 is transparent
+            width = width,
+            height = height,
             format_specific_header = bytes(indexed_header),
             color_depth = 8,
-            aux_data_size = len(aux_object_data),
+            aux_data_size = aux_data_size,
             flags = 0
         )
         for flag in flags:
@@ -718,37 +794,50 @@ class StiImagePlugin(ImageFile.ImageFile):
         # write to file
         fd.seek(0, 0) # from start
         fd.write(bytes(header))
-        palette_bytes = palette.tobytes() # layed out as bands
-        assert len(palette_bytes) == 256 * 3
-        fd.write(bytes([x for i in range(256) for x in palette_bytes[i::256]]))
-        for image_header in image_headers:
-            fd.write(bytes(image_header))
-        for data in compressed:
-            fd.write(data)
-        if 'AUX_OBJECT_DATA' in flags:
-            data = b"".join([bytes(x or AuxObjectData()) for x in aux_object_data[:num_images]])
-            fd.write(data)
 
     @staticmethod
-    def _save_handler(im, fd, filename):
-        """Handler for `Image.save('image.sti')`"""
-        if 'flags' not in im.encoderinfo:
-            im.encoderinfo['flags'] = ['RGB'] # default flags
-        if 'RGB' in im.encoderinfo['flags']:
-            return StiImagePlugin._save_rgb_image(im, fd)
-        if 'INDEXED' in im.encoderinfo['flags']:
-            im.encoderinfo['append_images'] = []
-            return StiImagePlugin._save_indexed_images(im, fd)
-        raise NotImplementedError("StiImagePlugin._save_handler {}".format(im.encoderinfo))
+    def _save_handler(img, fd, filename):
+        """
+        Handler for `Image.save` without `save_all=True`.
+
+        Data in dictionary `img.encoderinfo`:
+
+         * flags - (list) list of flags, default: ['RGB']
+         * ... - see _save_colors_image, _save_indexes_image, _save_etrle_images
+        """
+        flags = img.encoderinfo.get('flags', ['RGB'])
+        validate_flags(flags)
+        img.encoderinfo['flags'] = flags
+        if 'RGB' in flags:
+            return StiImagePlugin._save_colors_image(img, fd)
+        if 'INDEXED' in flags:
+            if 'ETRLE' in flags:
+                return StiImagePlugin._save_etrle_images(img, fd)
+            return StiImagePlugin._save_indexes_image(img, fd)
+        raise NotImplementedError("%r" % img.encoderinfo)
 
     @staticmethod
-    def _save_all_handler(im, fd, filename):
-        """Handler for `Image.save('image.sti', save_all=True, append_images=[...])"""
-        if 'flags' not in im.encoderinfo:
-            im.encoderinfo['flags'] = ['INDEXED', 'ETRLE'] # default flags
-        if 'INDEXED' in im.encoderinfo['flags']:
-            return StiImagePlugin._save_indexed_images(im, fd)
-        raise NotImplementedError("StiImagePlugin._save_all_handler {}".format(im.encoderinfo))
+    def _save_all_handler(img, fd, filename):
+        """
+        Handler for `Image.save` with `save_all=True`.
+
+        Data in dictionary `img.encoderinfo`:
+
+         * flags - (list) list of flags, default: ['INDEXED', 'ETRLE']
+         * append_images - (list) optional list of extra images, default: []
+         * ... - see _save_colors_image, _save_indexes_image, _save_etrle_images
+        """
+        flags = img.encoderinfo.get('flags', ['INDEXED', 'ETRLE'])
+        append_images = img.encoderinfo.get('append_images', [])
+        validate_flags(flags)
+        assert isinstance(append_images, Iterable), "append_images %r" % append_images
+        img.encoderinfo['flags'] = flags
+        img.encoderinfo['append_images'] = append_images
+        num_images = 1 + len(append_images)
+        if len(append_images) > 0:
+            return StiImagePlugin._save_etrle_images(img, fd)
+        else:
+            return StiImagePlugin._save_handler(img, fd, filename)
 
 
 """Reference map of rawmodes to specs. They may or may not be supported by raw_encoder/raw_decoder."""

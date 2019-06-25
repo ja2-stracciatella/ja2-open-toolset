@@ -4,7 +4,7 @@ from .fixtures import *
 from ja2py.fileformats import Sti16BitHeader, Sti8BitHeader, StiHeader, StiSubImageHeader, AuxObjectData,\
                               is_16bit_sti, is_8bit_sti, load_16bit_sti, load_8bit_sti, save_16bit_sti, save_8bit_sti
 from ja2py.content import Image16Bit, Images8Bit, SubImage8Bit
-from ja2py.fileformats.Sti import StiImagePlugin, StiImageEncoder
+from ja2py.fileformats.Sti import StiImagePlugin, StiImageEncoder, validate_spec, _color_components
 
 
 class TestSti16BitHeader(unittest.TestCase):
@@ -641,7 +641,7 @@ class TestStiImagePlugin(unittest.TestCase):
         self.assertEqual(img.format, StiImagePlugin.format)
         self.assertEqual(img.mode, 'RGBA')
         self.assertEqual(img.size, (1, 1))
-        self.assertEqual(img.getpixel((0, 0)), (1<<6,2<<6,3<<6,0<<6))
+        self.assertEqual(img.getpixel((0, 0)), (85, 170, 255, 0))
         self.assertEqual(bytes(img.info['header']), bytes(header))
         self.assertEqual(bytes(img.info['rgb_header']), bytes(rgb_header))
         buf = BytesIO()
@@ -937,4 +937,75 @@ class TestStiImageEncoder(unittest.TestCase):
         encoder.do = 'not_implemented' # override 'indexes'
         with self.assertRaises(NotImplementedError):
             encoder.encode()
+
+
+class Test_color_components(unittest.TestCase):
+    def _test_color_components(self, spec, colors, components):
+        validate_spec(spec)
+        found = dict()
+        for color in colors:
+            for component in _color_components(color, spec):
+                self.assertIn(component, components)
+                found[component] = True
+        self.assertEqual(len(found), len(components))
+
+    def test_0_bits(self):
+        spec = (0,0,0,0, 0,0,0,0, 8)
+        colors = [0,1]
+        components = [255]
+        self._test_color_components(spec, colors, components)
+
+    def test_1_bit(self):
+        spec = (0x01,0x02,0,0, 1,1,0,0, 8)
+        colors = range(256)
+        components = [0, 255]
+        self._test_color_components(spec, colors, components)
+
+    def test_2_bits(self):
+        spec = (0x03,0x0C,0,0, 2,2,0,0, 8)
+        colors = range(256)
+        components = [0, 85, 170, 255]
+        self._test_color_components(spec, colors, components)
+
+    def test_3_bits(self):
+        spec = (0x07,0x38,0,0, 3,3,0,0, 8)
+        colors = range(256)
+        components = [0, 36, 72, 109, 145, 182, 218, 255]
+        self._test_color_components(spec, colors, components)
+
+    def test_4_bits(self):
+        spec = (0x0F,0xF0,0,0, 4,4,0,0, 8)
+        colors = range(256)
+        components = [0, 17, 34, 51, 68, 85, 102, 119, 136, 153, 170, 187, 204, 221, 238, 255]
+        self._test_color_components(spec, colors, components)
+
+    def test_5_bits(self):
+        spec = (0x001F,0x03E0,0,0, 5,5,0,0, 16)
+        colors = range(0x400)
+        components = [0, 8, 16, 24, 32, 41, 49, 57, 65, 74, 82, 90, 98, 106, 115, 123, 131, 139, 148, 156, 164, 172, 180, 189, 197, 205, 213, 222, 230, 238, 246, 255]
+        self._test_color_components(spec, colors, components)
+
+    def test_6_bits(self):
+        spec = (0x003F,0x0FC0,0,0, 6,6,0,0, 16)
+        colors = range(0x1000)
+        components = [0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60, 64, 68, 72, 76, 80, 85, 89, 93, 97, 101, 105, 109, 113, 117, 121, 125, 129, 133, 137, 141, 145, 149, 153, 157, 161, 165, 170, 174, 178, 182, 186, 190, 194, 198, 202, 206, 210, 214, 218, 222, 226, 230, 234, 238, 242, 246, 250, 255]
+        self._test_color_components(spec, colors, components)
+
+    def test_7_bits(self):
+        spec = (0x007F,0x3F80,0,0, 7,7,0,0, 16)
+        colors = range(0x4000)
+        components = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40, 42, 44, 46, 48, 50, 52, 54, 56, 58, 60, 62, 64, 66, 68, 70, 72, 74, 76, 78, 80, 82, 84, 86, 88, 90, 92, 94, 96, 98, 100, 102, 104, 106, 108, 110, 112, 114, 116, 118, 120, 122, 124, 126, 128, 130, 132, 134, 136, 138, 140, 142, 144, 146, 148, 150, 152, 154, 156, 158, 160, 162, 164, 166, 168, 170, 172, 174, 176, 178, 180, 182, 184, 186, 188, 190, 192, 194, 196, 198, 200, 202, 204, 206, 208, 210, 212, 214, 216, 218, 220, 222, 224, 226, 228, 230, 232, 234, 236, 238, 240, 242, 244, 246, 248, 250, 252, 255]
+        self._test_color_components(spec, colors, components)
+
+    def test_8_bits(self):
+        spec = (0x00FF,0xFF00,0,0, 8,8,0,0, 16)
+        colors = range(0x10000)
+        components = range(256)
+        self._test_color_components(spec, colors, components)
+
+    def test_9_bits(self):
+        spec = (0x0001FF,0x03FE00,0,0, 9,9,0,0, 24)
+        colors = range(0x40000)
+        components = range(256)
+        self._test_color_components(spec, colors, components)
 

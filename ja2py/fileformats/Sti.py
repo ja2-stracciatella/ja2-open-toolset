@@ -382,18 +382,20 @@ def save_8bit_sti(ja2_images, file):
         file.write(bytes(aux_header))
 
 
-def _color_components(color, masks):
-    def component(color, mask):
-        if mask == 0:
-            return 0xFF # defaults to white/opaque
-        byte = color & mask
-        shift = 8 - mask.bit_length()
-        if shift > 0:
-            return byte << shift
-        elif shift < 0:
-            return byte >> -shift
-        return byte
-    components = [component(color, mask) for mask in masks]
+def _color_components(color, spec):
+    """Convert a raw color value matching the spec to byte color components."""
+    def component(color, mask, bits):
+        value = color & mask
+        if value == mask:
+            return 255 # always pure white/opaque
+        if bits > 8: # discard extra bits
+            shift = mask.bit_length() - 8
+            return value >> shift
+        # mimic SDL_GetRGBA (produces the entire 8-bit [0..255] range)
+        shift = mask.bit_length() - bits
+        max_value = (1 << bits) - 1
+        return ((value >> shift) * 255) // max_value
+    components = [component(color, mask, bits) for mask, bits in zip(spec[:4], spec[4:8])]
     return tuple(components)
 
 
@@ -920,7 +922,6 @@ class StiImageDecoder(ImageFile.PyDecoder):
             assert self.mode in ['RGB', 'RGBA'], "mode %r" % self.mode
             self.depth = self.spec[-1]
             self.rawmode = spec_to_rawmode(self.spec)
-            self.masks = self.spec[:len(self.mode)]
         elif self.do == 'fill':
             self.color = args[1]
             assert [isinstance(x, int) and x >= 0 and x <= 255 for x in self.color] == [True] * len(self.mode), "fill color %r" % self.color
@@ -971,7 +972,8 @@ class StiImageDecoder(ImageFile.PyDecoder):
                 assert bytes_per_pixel >= 4 # masks are limited to 4 bytes so ignore the rest
                 colors = struct.unpack("<" + "L{}x".format(bytes_per_pixel - 4) * num_pixels, buffer)
             assert len(colors) == num_pixels
-            buffer = bytes([x for color in colors for x in _color_components(color, self.masks)])
+            num_components = len(self.mode)
+            buffer = bytes([x for color in colors for x in _color_components(color, self.spec)[:num_components]])
             self.set_as_raw(buffer)
             return -1, 1 # done
         elif self.do == 'fill': # color

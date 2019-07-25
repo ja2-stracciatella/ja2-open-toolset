@@ -20,6 +20,7 @@
 import os
 import io
 import struct
+from collections import Iterable
 from PIL import Image, ImageFile, ImagePalette
 
 from .common import Ja2FileHeader
@@ -381,25 +382,98 @@ def save_8bit_sti(ja2_images, file):
         file.write(bytes(aux_header))
 
 
-def _color_components(color, masks):
-    def component(color, mask):
-        if mask == 0:
-            return 0xFF # defaults to white/opaque
-        byte = color & mask
-        shift = 8 - mask.bit_length()
-        if shift > 0:
-            return byte << shift
-        elif shift < 0:
-            return byte >> -shift
-        return byte
-    components = [component(color, mask) for mask in masks]
+def _color_components(color, spec):
+    """Convert a raw color value matching the spec to byte color components."""
+    def component(color, mask, bits):
+        value = color & mask
+        if value == mask:
+            return 255 # always pure white/opaque
+        if bits > 8: # discard extra bits
+            shift = mask.bit_length() - 8
+            return value >> shift
+        # mimic SDL_GetRGBA (produces the entire 8-bit [0..255] range)
+        shift = mask.bit_length() - bits
+        max_value = (1 << bits) - 1
+        return ((value >> shift) * 255) // max_value
+    components = [component(color, mask, bits) for mask, bits in zip(spec[:4], spec[4:8])]
     return tuple(components)
 
 
-class StiImagePlugin(ImageFile.ImageFile):
-    """Image plugin for Pillow/PIL that can load STI files."""
+def _color_bytes(components, spec):
+    """Convert color components to a byte array matching the spec."""
+    masks = spec[:4]
+    bits = spec[4:8]
+    depth = spec[8]
+    assert isinstance(depth, int) and depth >= sum(bits) and depth % 8== 0
+    color = 0
+    for byte, mask in zip(components, masks):
+        assert isinstance(byte, int) and byte >= 0 and byte <= 255
+        assert isinstance(mask, int) and mask >= 0 and mask <= 0xffffffff
+        if byte == 0 or mask == 0:
+            continue # already 0
+        shift = mask.bit_length() - 8
+        if shift > 0:
+            color |= (byte << shift) & mask
+        elif shift < 0:
+            color |= (byte >> -shift) & mask
+        else:
+            color |= byte & mask
+    if depth == 8:
+        return struct.pack('<B', color)
+    elif depth == 16:
+        return struct.pack('<H', color)
+    elif depth == 24:
+        return struct.pack('<HB', color & 0xffff, color >> 16)
+    else:
+        assert depth >= 32
+        extra = [0 for _ in range((depth - 32) // 8)] # 0 in extra bytes
+        return struct.pack('<L' + 'B' * len(extra), color, *extra)
 
-    format = "STCI"
+
+def validate_spec(spec):
+    """Validates a spec with asserts."""
+    assert isinstance(spec, Iterable), "spec type %r" % spec
+    assert len(spec) == 9, "spec len %r" % spec
+    masks = spec[:4]
+    depths = spec[4:8]
+    color_depth = spec[8]
+    for mask, depth in zip(masks, depths):
+        assert isinstance(mask, int), "mask type %r" % mask
+        assert isinstance(depth, int), "depth type %r" % depth
+        assert mask >= 0 and mask <= 0xffffffff, "mask value %r" % mask
+        assert depth >= 0 and depth <= 32, "depth value %r" % depth
+        assert mask & ~(((2 ** depth) - 1) << (mask.bit_length() - depth)) == 0, "mask bits %r %r" % (mask, depth)
+    assert isinstance(color_depth, int), "color depth type %r" % color_depth
+    assert color_depth >= 0 and color_depth <= 0xff and color_depth % 8 == 0, "color depth value %r" % color_depth
+    assert sum(depths) <= color_depth, "color depth size %r %r" % (depths, color_depth)
+
+
+def validate_flags(flags):
+    """Validates flags with asserts."""
+    assert isinstance(flags, Iterable), "flags type %r" % flags
+    assert ('RGB' in flags) != ('INDEXED' in flags), "either RGB or INDEXED %r" % flags
+    for flag in flags:
+        assert isinstance(flag, str), "flag type %r" % flag
+        assert flag in StiHeader.flags['flags'], "flag value %r" % flag
+    assert len(set(flags)) == len(flags), "duplicate flags %r" % flags
+
+
+class StiImagePlugin(ImageFile.ImageFile):
+    """
+    Image plugin for Pillow that can load STI files.
+
+    Images can be RGB or INDEXED.
+    INDEXED images can be encoded with ETRLE.
+
+    The meaning of ETRLE is unknown.
+    It is a run-length encoding applied to the indexes of each line of an image.
+    It uses control bytes, which contain a length in the 7 lower bits.
+    Each line ends with a control byte that has length 0.
+    Sequences of up to 127 indexes equal to 0 are compressed into 1 control byte that has the high bit set to 1.
+    Other sequences of up to 127 indexes are prefixed with 1 control byte that has the high bit set to 0.
+    """
+
+    format = 'STCI'
     format_description = "Sir-Tech's Crazy Image"
 
     def _open(self):
@@ -415,17 +489,21 @@ class StiImagePlugin(ImageFile.ImageFile):
             assert not header.get_flag('flags', 'INDEXED'), "RGB and INDEXED at the same time"
             assert not header.get_flag('flags', 'AUX_OBJECT_DATA'), "TODO aux object data in RGB" # XXX need example
             rgb_header = Sti16BitHeader.from_bytes(header['format_specific_header'])
-            assert rgb_header['alpha_channel_mask'] == 0, "TODO alpha channel in RGB" # XXX need example
-            self.mode = 'RGB'
-            depth = header['color_depth']
-            masks = ( rgb_header['red_color_mask'], rgb_header['green_color_mask'], rgb_header['blue_color_mask'] )
+            spec = (
+                rgb_header['red_color_mask'], rgb_header['green_color_mask'], rgb_header['blue_color_mask'], rgb_header['alpha_channel_mask'],
+                rgb_header['red_color_depth'], rgb_header['green_color_depth'], rgb_header['blue_color_depth'], rgb_header['alpha_channel_depth'],
+                header['color_depth']
+            )
+            if rgb_header['alpha_channel_mask'] == 0:
+                self.mode = 'RGB'
+            else:
+                self.mode = 'RGBA'
             self.tile = [ # single image
-                (self.format, (0, 0) + self.size, StiHeader.get_size(), ('rgb', depth, masks, header['size_after_compression']))
+                (self.format, (0, 0) + self.size, StiHeader.get_size(), ('rgb', spec, header['size_after_compression']))
             ]
             self.info['header'] = header
             self.info['rgb_header'] = rgb_header
             self.info['boxes'] = [(0, 0) + self.size]
-            self.info["transparency"] = _color_components(header['transparent_color'], masks)
         elif header.get_flag('flags', 'INDEXED'):
             # palette color image
             indexed_header = Sti8BitHeader.from_bytes(header['format_specific_header'])
@@ -438,27 +516,33 @@ class StiImagePlugin(ImageFile.ImageFile):
             self.mode = 'P'
             self.palette = ImagePalette.ImagePalette("RGB", raw[0::3] + raw[1::3] + raw[2::3])
             self.palette.dirty = True
-            subimage_headers = [StiSubImageHeader.from_bytes(self.fp.read(StiSubImageHeader.get_size())) for _ in range(indexed_header['number_of_images'])]
-            boxes = self._generate_boxes(subimage_headers)
-            offset = self.fp.tell()
-            if header.get_flag('flags', 'AUX_OBJECT_DATA'):
-                self.fp.seek(header['size_after_compression'], 1) # from current
-                aux_object_data = [AuxObjectData.from_bytes(self.fp.read(AuxObjectData.get_size())) for _ in range(indexed_header['number_of_images'])]
-                self.info['aux_object_data'] = aux_object_data
-            self.tile = [
-                (self.format, (0, 0) + self.size, offset, ('fill', header['transparent_color'])) # XXX wall index is another possibility
-            ]
-            for box, subimage in zip(boxes, subimage_headers):
-                if header.get_flag('flags', 'ETRLE'):
-                    parameters = ('etrle', subimage['length'], header['transparent_color']) # etrle indexes
-                else:
-                    parameters = ('copy', subimage['length']) # raw indexes
-                tile = (self.format, box, offset + subimage['offset'], parameters)
-                self.tile.append(tile)
+            if header.get_flag('flags', 'ETRLE'): # etrle encoded indexes, multiple subimages
+                # TODO open subimages as frames instead of composing an image?
+                num_images = indexed_header['number_of_images']
+                assert num_images > 0, "TODO 0 etrle subimages" # XXX need example
+                subimage_headers = [StiSubImageHeader.from_bytes(self.fp.read(StiSubImageHeader.get_size())) for _ in range(num_images)]
+                boxes = self._generate_boxes(subimage_headers)
+                offset = self.fp.tell()
+                self.tile = [
+                    (self.format, (0, 0) + self.size, offset, ('fill', [header['transparent_color']])) # XXX wall index is another possibility
+                ]
+                for box, subimage in zip(boxes, subimage_headers):
+                    parameters = ('etrle', header['transparent_color'], subimage['length'])
+                    tile = (self.format, box, offset + subimage['offset'], parameters)
+                    self.tile.append(tile)
+                self.info['boxes'] = boxes
+                self.info['subimage_headers'] = subimage_headers
+                if header.get_flag('flags', 'AUX_OBJECT_DATA'):
+                    self.fp.seek(header['size_after_compression'], 1) # from current
+                    aux_object_data = [AuxObjectData.from_bytes(self.fp.read(AuxObjectData.get_size())) for _ in range(num_images)]
+                    self.info['aux_object_data'] = aux_object_data
+            else: # raw indexes
+                assert not header.get_flag('flags', 'AUX_OBJECT_DATA'), "TODO INDEXED and AUX_OBJECT_DATA without ETRLE" # XXX need example
+                self.tile = [
+                    (self.format, (0, 0) + self.size, self.fp.tell(), ('indexes', header['width'] * header['height']))
+                ]
             self.info['header'] = header
             self.info['indexed_header'] = indexed_header
-            self.info['subimage_headers'] = subimage_headers
-            self.info['boxes'] = boxes
             self.info["transparency"] = header['transparent_color']
         else:
             raise SyntaxError('unknown image mode')
@@ -484,112 +568,734 @@ class StiImagePlugin(ImageFile.ImageFile):
         self.size = width, height
         return boxes
 
+    @staticmethod
+    def _save_colors_image(img, fd):
+        """
+        Data in dictionary `img.encoderinfo`:
+
+         * flags - (list) list of flags, requires flag 'RGB'
+         * spec  - (spec) optional rawmode string or spec, default is determined by StiImageEncoder, examples in RAWMODE_SPEC
+        """
+        flags = img.encoderinfo['flags']
+        validate_flags(flags)
+        assert 'RGB' in flags
+        assert 'INDEXED' not in flags
+        assert 'ETRLE' not in flags
+        assert 'ZLIB' not in flags # XXX needs example
+        assert 'AUX_OBJECT_DATA' not in flags # XXX needs example
+        encoder = StiImageEncoder('RGB', 'colors', img.encoderinfo.get('spec'))
+        spec = encoder.spec
+        validate_spec(spec)
+        encoder.setimage(img.im)
+        encoder.setfd(fd)
+        fd.seek(StiHeader.get_size(), 0) # from start
+        num_bytes, errcode = encoder.encode_to_pyfd()
+        if errcode < 0:
+            raise IOError("encoder error %d when writing RGB sti image file" % errcode)
+        fd.truncate()
+        rgb_header = Sti16BitHeader(
+            red_color_mask = spec[0],
+            green_color_mask = spec[1],
+            blue_color_mask = spec[2],
+            alpha_channel_mask = spec[3],
+            red_color_depth = spec[4],
+            green_color_depth = spec[5],
+            blue_color_depth = spec[6],
+            alpha_channel_depth = spec[7]
+        )
+        width, height = img.size
+        color_depth = spec[8]
+        header = StiHeader(
+            file_identifier = b'STCI',
+            initial_size = num_bytes,
+            size_after_compression = num_bytes,
+            transparent_color = 0,
+            width = width,
+            height = height,
+            format_specific_header = bytes(rgb_header),
+            color_depth = color_depth,
+            aux_data_size = 0,
+            flags = 0
+        )
+        for flag in flags:
+            header.set_flag('flags', flag, True)
+        fd.seek(0, 0) # from start
+        fd.write(bytes(header))
+
+    @staticmethod
+    def _save_indexes_image(img, fd):
+        """
+        Data in dictionary `img.encoderinfo`:
+
+         * flags - (list) list of flags
+         * transparent - (list) optional transparent palette index, default: 0
+        """
+        flags = img.encoderinfo['flags']
+        validate_flags(flags)
+        assert 'INDEXED' in flags
+        assert 'ETRLE' not in flags
+        assert 'RGB' not in flags
+        assert 'ZLIB' not in flags # XXX needs example
+        assert 'AUX_OBJECT_DATA' not in flags # XXX needs example
+        transparent = img.encoderinfo.get('transparent', 0) # XXX maybe ETRLE only?
+        assert isinstance(transparent, int), "transparent %r" % transparent
+        assert img.mode in ['P']
+        assert img.palette is not None
+        # write image data
+        fd.seek(StiHeader.get_size(), 0) # from start
+        data = img.palette.tobytes() # rgb bands
+        assert len(data) == 256 * 3
+        data = [x for i in range(256) for x in data[i::256]] # rgb colors
+        fd.write(bytes(data))
+        encoder = StiImageEncoder('P', 'indexes')
+        encoder.setimage(img.im)
+        encoder.setfd(fd)
+        num_bytes, errcode = encoder.encode_to_pyfd()
+        if errcode < 0:
+            raise IOError("encoder error %d when writing INDEXED sti image file" % errcode)
+        fd.truncate()
+        # write header
+        indexed_header = Sti8BitHeader(
+            number_of_palette_colors = 256,
+            number_of_images = 0, # XXX assuming ETRLE only
+            red_color_depth = 8,
+            green_color_depth = 8,
+            blue_color_depth = 8
+        )
+        width, height = img.size
+        header = StiHeader(
+            file_identifier = b'STCI',
+            initial_size = num_bytes,
+            size_after_compression = num_bytes,
+            transparent_color = transparent,
+            width = width,
+            height = height,
+            format_specific_header = bytes(indexed_header),
+            color_depth = 8,
+            aux_data_size = 0,
+            flags = 0
+        )
+        for flag in flags:
+            header.set_flag('flags', flag, True)
+        fd.seek(0, 0) # from start
+        fd.write(bytes(header))
+
+    @staticmethod
+    def _save_etrle_images(img, fd):
+        """
+        Data in dictionary `img.encoderinfo`:
+
+         * flags - (list) list of flags, 'INDEXED' is required
+         * append_images - (list) optional list of extra images, default: []
+         * transparent - (list) optional transparent RGB color , default: None
+         * semi_transparent - (str) optional string indicating how to handle semi transparent pixels, default: None
+           * 'transparent': make them transparent
+           * 'opaque': make them opaque
+         * offsets - (list) list of (x,y) offsets for each image, default: [], missing offsets default to (0,0)
+         * aux_object_data - (list) optional list of AuxObjectData, default: [], missing data defaults to AuxObjectData(), re   uires flag 'AUX_OBJECT_DATA'
+        """
+        flags = img.encoderinfo['flags']
+        validate_flags(flags)
+        assert 'INDEXED' in flags
+        assert 'ETRLE' in flags
+        assert 'RGB' not in flags
+        assert 'ZLIB' not in flags # XXX needs example
+        images = [img] + img.encoderinfo.get('append_images', [])
+        num_images = len(images)
+        transparent = img.encoderinfo.get('transparent')
+        assert transparent is None or len(transparent) == 3, "transparent %r" % transparent
+        semi_transparent = img.encoderinfo.get('semi_transparent')
+        assert semi_transparent in [None, 'transparent', 'opaque'], "semi_transparent %r" % semi_transparent
+        offsets = img.encoderinfo.get('offsets', [])
+        assert isinstance(offsets, Iterable), "offsets %r" % offsets
+        if num_images > len(offsets):
+            offsets += [None] * (num_images - len(offsets))
+        aux_object_data = img.encoderinfo.get('aux_object_data', [])
+        assert isinstance(aux_object_data, Iterable), "aux_object_data %r" % aux_object_data
+        if num_images > len(aux_object_data):
+            aux_object_data += [None] * (num_images - len(aux_object_data))
+        # convert images to a shared palette
+        palette = ImagePalette.ImagePalette()
+        index = palette.getcolor(transparent or (0, 0, 0))
+        assert index == 0 # XXX assuming index 0 is transparent
+        indexed = []
+        for img in images:
+            data = bytearray()
+            img = img.convert('RGBA')
+            for color in img.getdata():
+                rgb = color[:3]
+                a = color[3]
+                if a != 0 and a != 255:
+                    if semi_transparent == 'transparent':
+                        a = 0
+                    elif semi_transparent == 'opaque':
+                        a = 255
+                    else:
+                        raise ValueError("semi transparent color found, set `semi_transparent` to 'transparent' or 'opaque' {}".format(color))
+                if a == 0:
+                    data.append(0) # transparent
+                else:
+                    data.append(palette.getcolor(rgb))
+            indexed.append(bytes(data))
+        # write image data
+        fd.seek(StiHeader.get_size(), 0) # from start
+        palette_bands = palette.tobytes()
+        assert len(palette_bands) == 256 * 3
+        palette_colors = bytes([x for i in range(256) for x in palette_bands[i::256]])
+        fd.write(palette_colors)
+        compressed = []
+        offset = 0
+        for i in range(num_images):
+            img = Image.new('P', images[i].size)
+            img.putpalette(palette)
+            img.putdata(indexed[i])
+            data = img.tobytes(StiImagePlugin.format, 'etrle') # uses StiImageEncoder
+            offset_x, offset_y = offsets[i] or (0, 0) # default offset
+            width, height = images[i].size
+            subimage_header = StiSubImageHeader(
+                offset = offset,
+                length = len(data),
+                offset_x = offset_x,
+                offset_y = offset_y,
+                height = height,
+                width = width
+            )
+            fd.write(bytes(subimage_header))
+            compressed.append(data)
+            offset += len(data)
+        for data in compressed:
+            fd.write(data)
+        aux_data_size = 0
+        if 'AUX_OBJECT_DATA' in flags:
+            data = b"".join([bytes(x or AuxObjectData()) for x in aux_object_data[:num_images]])
+            aux_data_size = len(data)
+            fd.write(data)
+        fd.truncate()
+        indexed_header = Sti8BitHeader(
+            number_of_palette_colors = 256,
+            number_of_images = num_images,
+            red_color_depth = 8,
+            green_color_depth = 8,
+            blue_color_depth = 8
+        )
+        width, height = img.size
+        header = StiHeader(
+            file_identifier = b'STCI',
+            initial_size = sum([len(x) for x in indexed]),
+            size_after_compression = offset,
+            transparent_color = 0, # XXX assuming palette index 0 is transparent
+            width = width,
+            height = height,
+            format_specific_header = bytes(indexed_header),
+            color_depth = 8,
+            aux_data_size = aux_data_size,
+            flags = 0
+        )
+        for flag in flags:
+            header.set_flag('flags', flag, True)
+        # write to file
+        fd.seek(0, 0) # from start
+        fd.write(bytes(header))
+
+    @staticmethod
+    def _save_handler(img, fd, filename):
+        """
+        Handler for `Image.save` without `save_all=True`.
+
+        Data in dictionary `img.encoderinfo`:
+
+         * flags - (list) list of flags, default: ['RGB']
+         * ... - see _save_colors_image, _save_indexes_image, _save_etrle_images
+        """
+        flags = img.encoderinfo.get('flags', ['RGB'])
+        validate_flags(flags)
+        img.encoderinfo['flags'] = flags
+        if 'RGB' in flags:
+            return StiImagePlugin._save_colors_image(img, fd)
+        if 'INDEXED' in flags:
+            if 'ETRLE' in flags:
+                return StiImagePlugin._save_etrle_images(img, fd)
+            return StiImagePlugin._save_indexes_image(img, fd)
+        raise NotImplementedError("%r" % img.encoderinfo)
+
+    @staticmethod
+    def _save_all_handler(img, fd, filename):
+        """
+        Handler for `Image.save` with `save_all=True`.
+
+        Data in dictionary `img.encoderinfo`:
+
+         * flags - (list) list of flags, default: ['INDEXED', 'ETRLE']
+         * append_images - (list) optional list of extra images, default: []
+         * ... - see _save_colors_image, _save_indexes_image, _save_etrle_images
+        """
+        flags = img.encoderinfo.get('flags', ['INDEXED', 'ETRLE'])
+        append_images = img.encoderinfo.get('append_images', [])
+        validate_flags(flags)
+        assert isinstance(append_images, Iterable), "append_images %r" % append_images
+        img.encoderinfo['flags'] = flags
+        img.encoderinfo['append_images'] = append_images
+        num_images = 1 + len(append_images)
+        if len(append_images) > 0:
+            return StiImagePlugin._save_etrle_images(img, fd)
+        else:
+            return StiImagePlugin._save_handler(img, fd, filename)
+
+
+"""Reference map of rawmodes to specs. They may or may not be supported by raw_encoder/raw_decoder."""
+RAWMODE_SPEC = {
+    'BGR;16': (0xf800,0x07e0,0x001f,0x0000, 5,6,5,0, 16),
+    'BGR;15': (0x7c00,0x03e0,0x001f,0x0000, 5,5,5,0, 16),
+    'BGRA;15': (0x7c00,0x03e0,0x001f,0x8000, 5,5,5,1, 16),
+    'RGBA;15': (0x001f,0x03e0,0x7c00,0x8000, 5,5,5,1, 16),
+    'RGB;4B': (0x000f,0x00f0,0x0f00,0x0000, 4,4,4,0, 16),
+    'RGBA;4B': (0x000f,0x00f0,0x0f00,0xf000, 4,4,4,4, 16),
+
+    'BGR': (0xff0000,0x00ff00,0x0000ff,0x000000, 8,8,8,0, 24),
+    'RGB': (0x0000ff,0x00ff00,0xff0000,0x000000, 8,8,8,0, 24),
+
+    'ABGR': (0xff000000,0x00ff0000,0x0000ff00,0x000000ff, 8,8,8,8, 32),
+    'XBGR': (0xff000000,0x00ff0000,0x0000ff00,0x00000000, 8,8,8,0, 32),
+    'ARGB': (0x0000ff00,0x00ff0000,0xff000000,0x000000ff, 8,8,8,8, 32),
+    'XRGB': (0x0000ff00,0x00ff0000,0xff000000,0x00000000, 8,8,8,0, 32),
+    'BGRA': (0x00ff0000,0x0000ff00,0x000000ff,0xff000000, 8,8,8,8, 32),
+    'BGRX': (0x00ff0000,0x0000ff00,0x000000ff,0x00000000, 8,8,8,0, 32),
+    'RGBA': (0x000000ff,0x0000ff00,0x00ff0000,0xff000000, 8,8,8,8, 32),
+    'RGBX': (0x000000ff,0x0000ff00,0x00ff0000,0x00000000, 8,8,8,0, 32),
+
+    'R': (0xff,0x00,0x00,0x00, 8,0,0,0, 8),
+    'G': (0x00,0xff,0x00,0x00, 0,8,0,0, 8),
+    'B': (0x00,0x00,0xff,0x00, 0,0,8,0, 8),
+    'A': (0x00,0x00,0x00,0xff, 0,0,0,8, 8),
+    'RGBAX': (0x000000ff,0x0000ff00,0x00ff0000,0xff000000, 8,8,8,8, 40),
+    'RGBAXX': (0x000000ff,0x0000ff00,0x00ff0000,0xff000000, 8,8,8,8, 48),
+}
+
+
+for spec in RAWMODE_SPEC.values():
+    validate_spec(spec)
+
+
+def spec_to_rawmode(spec):
+    """Returns the rawmode of a spec or None."""
+    for r, s in RAWMODE_SPEC.items():
+        if spec == s:
+            return r
+    return None
+
+
+def rawmode_to_spec(rawmode):
+    """Returns the spec of a rawmode or None."""
+    return RAWMODE_SPEC.get(rawmode)
+
+
+"""The spec used in official images that have flag 'RGB'."""
+OFFICIAL_RGB_SPEC = RAWMODE_SPEC.get('BGR;16')
+
 
 class StiImageDecoder(ImageFile.PyDecoder):
     """Decoder for images in a STI file."""
 
-    def init(self, args):
-        do = args[0]
-        if do == 'rgb':
-            self.decode = self.decode_rgb
-            self.depth = args[1]
-            self.masks = args[2]
-            self.bytes = args[3]
-            assert self.mode == 'RGB' and len(self.masks) == 3, "TODO rgb mode {} {}".format(self.mode, self.masks) # XXX RGBA?
-            assert self.depth in [16], "TODO color depth {}".format(self.depth) # XXX due to the size of the masks the maximum is 32
-            assert isinstance(self.bytes, int) and self.bytes >= 0
-        elif do == 'fill':
-            self.decode = self.decode_fill
-            self.color = args[1]
-        elif do == 'copy':
-            self.decode = self.decode_copy
-            self.bytes = args[1]
-            assert self.mode == "P"
-            assert isinstance(self.bytes, int) and self.bytes >= 0
-        elif do == 'etrle':
-            self.decode = self.decode_etrle
-            self.bytes = args[1]
-            self.transparent = args[2]
-            self.data = bytearray()
-            assert self.mode == "P"
-            assert isinstance(self.bytes, int) and self.bytes >= 0
-            assert isinstance(self.transparent, int) and self.transparent == 0 # XXX etrle_decompress expects index 0
-        else:
-            raise NotImplementedError("unsupported args {}".format(args))
-        self.x = 0
-        self.y = 0
+    # List of rawmodes supported by Pillow's raw_decoder.
+    # Assumes mode RGBA when there is an A band, and mode RGB otherwise.
+    RAWMODES = (
+        'BGR;16', 'BGR;15', 'BGRA;15', 'RGBA;15', 'RGB;4B', 'RGBA;4B', # 16 bits
+        'BGR', 'RGB', # 24 bits
+        'ABGR', 'XBGR', 'ARGB', 'BGRA', 'BGRX', 'RGBA', # 32 bits
+        'R', 'G', 'B', 'A', # 8 bits
+        # XXX other rawmodes have problems
+        #'RGBX', # (consistency problem) the X band is not set to 255 like the other cases
+        #'XRGB', # (buffer problem?) wrongly listed as 24 bits
+        #'RGBAX', # (version problem) needs Pillow>=5.3.0
+        #'RGBAXX', # (version problem) needs Pillow>=5.3.0
+    )
 
-    def positions(self):
-        """iterates over all positions"""
-        while self.y < self.state.ysize:
-            while self.x < self.state.xsize:
-                yield self.x + self.state.xoff, self.y + self.state.yoff
-                self.x += 1
-            self.y += 1
-            self.x = 0
+    def init(self, args):
+        self.do = args[0]
+        self.data = bytearray()
+        self.bytes = 0
+        if self.do == 'rgb':
+            self.spec = args[1]
+            self.bytes = args[2]
+            validate_spec(self.spec)
+            assert isinstance(self.bytes, int) and self.bytes >= 0, "number of bytes %r" % self.bytes
+            assert self.mode in ['RGB', 'RGBA'], "mode %r" % self.mode
+            self.depth = self.spec[-1]
+            self.rawmode = spec_to_rawmode(self.spec)
+        elif self.do == 'fill':
+            self.color = args[1]
+            assert [isinstance(x, int) and x >= 0 and x <= 255 for x in self.color] == [True] * len(self.mode), "fill color %r" % self.color
+            assert self.mode in ['P', 'RGB', 'RGBA'], "mode %r" % self.mode
+        elif self.do == 'indexes':
+            self.bytes = args[1]
+            assert isinstance(self.bytes, int) and self.bytes >= 0, "number of bytes %r" % self.bytes
+            assert self.mode == 'P', "mode %r" % self.mode
+        elif self.do == 'etrle':
+            self.transparent = args[1]
+            self.bytes = args[2]
+            assert isinstance(self.transparent, int) and self.transparent == 0, "transparent index %r" % self.transparent # XXX etrle_decompress expects index 0
+            assert isinstance(self.bytes, int) and self.bytes >= 0, "number of bytes %r" % self.bytes
+            assert self.mode == "P", "mode %r" % self.mode
+        else:
+            raise NotImplementedError("decoder args {}".format(args))
 
     def decode(self, buffer):
-        raise NotImplementedError("placeholder")
+        """Decodes buffer data as image pixels"""
+        # gather the target amount of data
+        if self.bytes > len(buffer):
+            self.data.extend(buffer)
+            self.bytes -= len(buffer)
+            return len(buffer), 0 # get more data
+        self.data.extend(buffer[:self.bytes])
+        self.bytes = 0
+        buffer = bytes(self.data)
+        num_pixels = self.state.xsize * self.state.ysize
+        # decode
+        if self.do == 'rgb': # colors
+            bytes_per_pixel = self.depth // 8
+            assert len(buffer) == num_pixels * bytes_per_pixel, "data size %r" % len(buffer)
+            if self.rawmode in self.RAWMODES: # fast C code
+                try:
+                    self.set_as_raw(buffer, rawmode=self.rawmode)
+                    return -1, 1 # done
+                except Exception as ex:
+                    print("FIXME mode %r rawmode %r failed: %r" % (self.mode, self.rawmode, ex))
+            # generic python fallback
+            if bytes_per_pixel == 1:
+                colors = struct.unpack("<{}B".format(num_pixels), buffer)
+            elif bytes_per_pixel == 2:
+                colors = struct.unpack("<{}H".format(num_pixels), buffer)
+            elif bytes_per_pixel == 3:
+                colors = struct.unpack("<" + "HB" * num_pixels, buffer)
+                colors = [low + high << 16 for low, high in zip(colors[0::2], colors[1::2])]
+            else:
+                assert bytes_per_pixel >= 4 # masks are limited to 4 bytes so ignore the rest
+                colors = struct.unpack("<" + "L{}x".format(bytes_per_pixel - 4) * num_pixels, buffer)
+            assert len(colors) == num_pixels
+            num_components = len(self.mode)
+            buffer = bytes([x for color in colors for x in _color_components(color, self.spec)[:num_components]])
+            self.set_as_raw(buffer)
+            return -1, 1 # done
+        elif self.do == 'fill': # color
+            buffer = bytes(self.color * num_pixels)
+            self.set_as_raw(buffer)
+            return -1, 1 # done
+        elif self.do == 'indexes': # uncompressed indexes
+            self.set_as_raw(buffer)
+            return -1, 1 # done
+        elif self.do == 'etrle': # etrle compressed indexes
+            buffer = bytes(etrle_decompress(self.data))
+            self.set_as_raw(buffer)
+            return -1, 1 # done
+        raise NotImplementedError("do %r", self.do)
 
-    def decode_rgb(self, buffer):
-        """copy colors"""
-        assert self.depth == 16
-        offset = 0
-        pixels = self.im.pixel_access()
-        for x, y in self.positions():
-            assert self.bytes >= 2, "not enough data"
-            if offset + 2 > len(buffer):
-                return offset, 0 # get more data
-            color = struct.unpack_from("<H", buffer, offset)[0]
-            pixels[x, y] = _color_components(color, self.masks)
-            offset += 2
-            self.bytes -= 2
-        assert self.bytes == 0, "too much data"
-        return -1, 0 # done
 
-    def decode_fill(self, buffer):
-        """fill with color"""
-        pixels = self.im.pixel_access()
-        for x, y in self.positions():
-            pixels[x, y] = self.color
-        return -1, 0 # done
+# XXX ImageFile.PyEncoder does not exist
+class PyEncoder(object):
+    """
+    Python implementation of a format encoder.
 
-    def decode_copy(self, buffer):
-        """copy raw indexes"""
-        offset = 0
-        pixels = self.im.pixel_access()
-        for x, y in self.positions():
-            if offset == len(buffer):
-                return offset, 0 # get more data
-            assert self.bytes > 0, "not enough data"
-            pixels[x, y] = buffer[offset]
-            offset += 1
-            self.bytes -= 1
-        assert self.bytes == 0, "too much data"
-        return -1, 0 # done
+    Override this class and add the encoding logic in the `encode` method.
+    The encoder should be registered with:
+    ```
+    Image.register_encoder('name', MyEncoderClass)
+    ```
 
-    def decode_etrle(self, buffer):
-        """copy etrle indexes"""
-        if self.bytes > 0:
-            bytes = min(self.bytes, len(buffer))
-            self.data.extend(buffer[:self.bytes])
-            self.bytes -= bytes
-            if self.bytes > 0:
-                return len(buffer), 0 # get more data
-        self.data = etrle_decompress(self.data)
-        offset = 0
-        pixels = self.im.pixel_access()
-        for x, y in self.positions():
-            assert offset < len(self.data), "not enough data"
-            pixels[x, y] = self.data[offset]
-            offset += 1
-        assert offset == len(self.data), "too much data"
-        self.data = None
-        return -1, 0 # done
+    This class mimics the interface of ImagingEncoder excluding `encode_to_file`.
+    """
+
+    _pushes_fd = False
+
+    def __init__(self, mode, *args):
+        self.im = None
+        self.state = ImageFile.PyCodecState()
+        self.fd = None
+        self.mode = mode
+        self.init(args)
+
+    def init(self, args):
+        """
+        Override to perform decoder specific initialization
+
+        :param args: Array of args items from the tile entry
+        :returns: None
+        """
+        self.args = args
+
+    @property
+    def pushes_fd(self):
+        """True if this encoder expects to push directly to self.fd"""
+        return self._pushes_fd
+
+    def encode(self, bufsize=16384):
+        """
+        Override to encode data to a new buffer limited by bufsize.
+        If errcode is 0, there is more data to encode.
+
+        :param bufsize: Optional buffer size.
+        :returns: A tuple of (bytes produced, errcode, buffer).
+            Positive errcode means it is done.
+            Negative errcode means an error from `ImageFile.ERRORS` occured.
+        """
+        raise NotImplementedError()
+
+    def cleanup(self):
+        """
+        Override to perform encoder specific cleanup.
+
+        :returns: None
+        """
+        pass
+
+    def encode_to_pyfd(self):
+        """
+        Override to perform the encoding process to a python file-like object.
+        The default implementation uses `encode` with the default buffer size.
+
+        :returns: A tuple of (bytes produced, errcode).
+            Positive errcode means it is done.
+            Negative errcode means an error from `ImageFile.ERRORS` occured.
+        """
+        total_bytes = 0
+        while True:
+            num_bytes, errcode, buffer = self.encode()
+            total_bytes += num_bytes
+            self.fd.write(buffer)
+            if errcode:
+                return total_bytes, errcode
+
+    def setimage(self, im, extents=None):
+        """
+        Set the core input image for the encoder.
+
+        :param im: A core image object.
+        :param extents: A 4 tuple of (x0, y0, x1, y1) defining the rectangle for this tile.
+        :returns: None
+        """
+        self.im = im
+
+        if extents:
+            (x0, y0, x1, y1) = extents
+        else:
+            (x0, y0, x1, y1) = (0, 0, 0, 0)
+
+        if x0 == 0 and x1 == 0:
+            self.state.xsize, self.state.ysize = self.im.size
+        else:
+            self.state.xoff = x0
+            self.state.yoff = y0
+            self.state.xsize = x1 - x0
+            self.state.ysize = y1 - y0
+
+        if self.state.xsize <= 0 or self.state.ysize <= 0:
+            raise ValueError("Size cannot be negative")
+
+        if (self.state.xsize + self.state.xoff > self.im.size[0] or
+           self.state.ysize + self.state.yoff > self.im.size[1]):
+            raise ValueError("Tile cannot extend outside image")
+
+    def setfd(self, fd):
+        """
+        Set the python file-like object.
+
+        :param fd: A python file-like object
+        :returns: None
+        """
+        self.fd = fd
+
+
+class StiImageEncoder(PyEncoder):
+    """
+    Encoder for images in a STI file.
+
+    ```
+    img.tobytes(StiImagePlugin.format, 'colors', (spec,)) # defaults to official spec
+    img.tobytes(StiImagePlugin.format, 'indexes')
+    img.tobytes(StiImagePlugin.format, 'etrle')
+    ```
+    """
+
+    # List of rawmodes supported by Pillow's raw_encoder.
+    # Assumes mode RGBA when there is an A band, and mode RGB otherwise.
+    RAWMODES = [
+        'BGR', 'RGB', # 24 bits
+        'ABGR', 'XBGR', 'XRGB', 'BGRA', 'BGRX', 'RGBA', # 32 bits
+        'R', 'G', 'B', 'A', # 8 bits
+        # XXX other rawmodes have problems
+        #'RGBX', # (consistency problem) the X band is not set to 0 like the other cases
+    ]
+
+    def init(self, args):
+        self.do = args[0]
+        if self.do == 'colors':
+            assert self.mode in ['RGB', 'RGBA']
+            self.spec = args[1] or OFFICIAL_RGB_SPEC # default spec
+            if isinstance(self.spec, str):
+                self.rawmode = self.spec
+                self.spec = rawmode_to_spec(self.rawmode)
+            else:
+                self.rawmode = spec_to_rawmode(self.spec)
+            self.rawencoder = None
+            validate_spec(self.spec)
+            alpha_mask = self.spec[3]
+            if alpha_mask == 0:
+                self.mode = 'RGB' # force no alpha
+            else:
+                self.mode = 'RGBA' # force alpha
+            self.bytes = bytearray()
+            self.y = None
+            self.x = None
+        elif self.do == 'indexes':
+            assert self.mode in ['P']
+            self.x = None
+            self.y = None
+        elif self.do == 'etrle':
+            assert self.mode in ['P']
+            self.bytes = bytearray()
+            self.x = None
+            self.y = None
+        else:
+            raise NotImplementedError("do %r" % self.do)
+
+    def encode(self, bufsize=16384):
+        """
+        Encode data to a new buffer limited by bufsize.
+        If errcode is 0, there is more data to encode.
+
+        :param bufsize: Optional buffer size.
+        :returns: A tuple of (bytes produced, errcode, buffer).
+            Positive errcode means it is done.
+            Negative errcode means an error from `ImageFile.ERRORS` occured.
+        """
+        if self.do == 'colors':
+            return self._encode_colors(bufsize)
+        elif self.do == 'indexes':
+            return self._encode_indexes(bufsize)
+        elif self.do == 'etrle':
+            return self._encode_etrle(bufsize)
+        raise NotImplementedError("do %r" % self.do)
+
+    def _encode_colors(self, bufsize):
+        """Encode colors according to the spec."""
+        assert self.mode in ['RGB', 'RGBA']
+        if self.im.mode != self.mode:
+            self.im = self.im.copy().convert(self.mode)
+        if self.rawmode in self.RAWMODES:
+            if self.rawencoder is None:
+                self.rawencoder = Image._getencoder(self.mode, 'raw', (self.rawmode))
+                self.rawencoder.setimage(self.im, self.state.extents())
+            return self.rawencoder.encode(bufsize)
+        pixel_access = self.im.pixel_access()
+        depth = self.spec[8]
+        x0, y0, x1, y1 = self.state.extents()
+        for y in range(self.y or y0, y1):
+            for x in range(self.x or x0, x1):
+                if len(self.bytes) > bufsize:
+                    self.y = y
+                    self.x = x
+                    buffer = bytes(self.bytes[:bufsize])
+                    self.bytes = self.bytes[bufsize:]
+                    return len(buffer), 0, buffer # there is more data
+                color = pixel_access[x, y]
+                data = _color_bytes(color, self.spec)
+                self.bytes.extend(data)
+            self.x = None
+        else:
+            self.y = y1
+        if len(self.bytes) > bufsize:
+            buffer = bytes(self.bytes[:bufsize])
+            self.bytes = self.bytes[bufsize:]
+            return len(buffer), 0, buffer # there is more data
+        buffer = bytes(self.bytes)
+        self.bytes = self.bytes[:0]
+        return len(buffer), 1, buffer # done
+
+    def _encode_indexes(self, bufsize):
+        """Copy palette indexes."""
+        assert self.mode == 'P'
+        assert self.im.mode == 'P'
+        pixel_access = self.im.pixel_access()
+        buffer = bytearray()
+        x0, y0, x1, y1 = self.state.extents()
+        for y in range(self.y or y0, y1):
+            for x in range(self.x or x0, x1):
+                if bufsize <= len(buffer):
+                    self.y = y
+                    self.x = x
+                    return len(buffer), 0, buffer # there is more data
+                index = pixel_access[x, y]
+                buffer.append(index)
+            self.x = None
+        return len(buffer), 1, buffer # done
+
+    def _encode_etrle(self, bufsize):
+        """Encode palette indexes with ETRLE."""
+        assert self.mode == 'P'
+        assert self.im.mode == 'P'
+        pixel_access = self.im.pixel_access()
+        buffer = bytearray()
+        x0, y0, x1, y1 = self.state.extents()
+        for y in range(self.y or y0, y1):
+            if len(self.bytes) > bufsize:
+                buffer = bytes(self.bytes[:bufsize])
+                self.bytes = self.bytes[bufsize:]
+                self.y = y
+                return len(buffer), 0, buffer # there is more data
+            # process a complete line
+            line = bytearray()
+            for x in range(x0, x1):
+                index = pixel_access[x, y]
+                line.append(index)
+            while len(line) > 0:
+                control = 0 # uncompressed
+                n = len(line)
+                for i in range(1,n):
+                    # lone 0's that can increase the size are left uncompressed
+                    if line[i] != 0:
+                        continue
+                    if line[i-1] != 0:
+                        if i+1 == n:
+                            n -= 1 # uncompressed length, next cycle is compressed (lone 0 at the end)
+                            break
+                        continue
+                    if i == 1: # [0, 0, ...]
+                        control = 0x80 # compressed
+                        for i in range(2,n):
+                            if line[i] != 0:
+                                n = i
+                                break
+                    else:
+                        n = i-1 # uncompressed length, next cycle is compressed
+                    break
+                else:
+                    if n == 1 and line[0] == 0:
+                        control = 0x80 # compressed, lone 0 at the end
+                n = min(n, 0x7f) # respect maximum length
+                # encode
+                assert control in [0, 0x80]
+                assert n >= 1 and n <= 0x7f
+                self.bytes.append(control | n)
+                if control == 0:
+                    self.bytes.extend(line[:n])
+                line = line[n:]
+            self.bytes.append(0) # end of line, control with length 0
+        else:
+            self.y = y1
+        if len(self.bytes) > bufsize:
+            buffer = bytes(self.bytes[:bufsize])
+            self.bytes = self.bytes[bufsize:]
+            return len(buffer), 0, buffer # there is more data
+        buffer = bytes(self.bytes)
+        self.bytes = self.bytes[len(self.bytes):]
+        return len(buffer), 1, buffer # done
 
 
 # register STI image plugin
 Image.register_decoder(StiImagePlugin.format, StiImageDecoder)
+Image.register_encoder(StiImagePlugin.format, StiImageEncoder)
 Image.register_open(StiImagePlugin.format, StiImagePlugin, lambda x: len(x) >= 4 and x[:4] == b'STCI')
+Image.register_save(StiImagePlugin.format, StiImagePlugin._save_handler)
+Image.register_save_all(StiImagePlugin.format, StiImagePlugin._save_all_handler)
 Image.register_extension(StiImagePlugin.format, '.sti')
+Image.register_mime(StiImagePlugin.format, 'image/x-stci')
 

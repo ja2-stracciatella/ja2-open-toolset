@@ -51,7 +51,9 @@ class SlfEntry(Ja2FileHeader):
     def map_raw_to_attrs(raw):
         attrs = raw.copy()
         attrs['file_name'] = decode_ja2_string(raw['file_name'])
-        attrs['time'] = gmtime(float(raw['time']) / 10000000.0 - 11644473600.0)
+        ts = float(raw['time']) / 10000000.0 - 11644473600.0
+        if os.name != 'nt' or ts > 0:  ## negative ts causes error on Windows: https://bugs.python.org/issue36439
+            attrs['time'] = gmtime(ts)
         return attrs
 
     @staticmethod

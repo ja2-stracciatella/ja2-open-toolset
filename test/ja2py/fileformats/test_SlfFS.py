@@ -3,7 +3,9 @@ import unittest
 from datetime import datetime
 from io import BytesIO
 from time import strptime
-from fs.errors import CreateFailedError, UnsupportedError, ResourceNotFoundError, ResourceInvalidError
+from fs.errors import CreateFailed, Unsupported, ResourceNotFound, ResourceInvalid
+from fs.mountfs import MountFS
+from fs.tempfs import TempFS
 from ja2py.fileformats import SlfEntry, SlfHeader, SlfFS, BufferedSlfFS
 
 class TestSlfFSEntry(unittest.TestCase):
@@ -207,16 +209,30 @@ class TestSlfFS(unittest.TestCase):
         time = strptime('19900101T010000UTC', "%Y%m%dT%H%M%S%Z")
         slf_file = SlfFS(create_test_slf_fs())
 
-        self.assertEqual(slf_file.getinfo('/foo'), {'size': 0})
-        self.assertEqual(slf_file.getinfo('/foo/bar.baz'), {'size': 5, 'modified_time': time})
-        self.assertEqual(slf_file.getinfo('/spam/parrot.txt'), {'size': 5, 'modified_time': time})
-        self.assertEqual(slf_file.getinfo('/spam/ham/parrot.txt'), {'size': 6, 'modified_time': time})
-        self.assertEqual(slf_file.getinfo('/carrot'), {'size': 6, 'modified_time': time})
+        info = slf_file.getinfo('/foo')
+        self.assertEqual(info.size, 0)
+        info = slf_file.getinfo('/foo/bar.baz')
+        self.assertEqual(info.size, 5)
+        actual_time = info.modified.timetuple()
+        expected_time = time
+        self.assertEqual(actual_time[:8], expected_time[:8])  # Ignore tm_isdst
+        info = slf_file.getinfo('/spam/parrot.txt')
+        self.assertEqual(info.size, 5)
+        actual_time = info.modified.timetuple()
+        self.assertEqual(actual_time[:8], expected_time[:8])  # Ignore tm_isdst
+        info = slf_file.getinfo('/spam/ham/parrot.txt')
+        self.assertEqual(info.size, 6)
+        actual_time = info.modified.timetuple()
+        self.assertEqual(actual_time[:8], expected_time[:8])  # Ignore tm_isdst
+        info = slf_file.getinfo('/carrot')
+        self.assertEqual(info.size, 6)
+        actual_time = info.modified.timetuple()
+        self.assertEqual(actual_time[:8], expected_time[:8])  # Ignore tm_isdst
 
     def test_file_info_on_missing_file(self):
         slf_file = SlfFS(create_test_slf_fs())
 
-        with self.assertRaises(ResourceNotFoundError):
+        with self.assertRaises(ResourceNotFound):
             slf_file.getinfo('/foo/missing')
 
     def test_file_open(self):
@@ -230,32 +246,60 @@ class TestSlfFS(unittest.TestCase):
     def test_open_directory(self):
         slf_file = SlfFS(create_test_slf_fs())
 
-        with self.assertRaises(ResourceInvalidError):
+        with self.assertRaises(ResourceInvalid):
             slf_file.open('/foo', 'r')
 
     def test_open_missing_file(self):
         slf_file = SlfFS(create_test_slf_fs())
 
-        with self.assertRaises(ResourceNotFoundError):
+        with self.assertRaises(ResourceNotFound):
             slf_file.open('/foo/missing', 'r')
 
     def test_writing_not_supported(self):
         slf_file = SlfFS(create_test_slf_fs())
 
-        with self.assertRaises(UnsupportedError):
+        with self.assertRaises(Unsupported):
             slf_file.open('/foo', 'w')
 
-        with self.assertRaises(UnsupportedError):
+        with self.assertRaises(Unsupported):
             slf_file.makedir('/foo')
 
-        with self.assertRaises(UnsupportedError):
+        with self.assertRaises(Unsupported):
             slf_file.removedir('/foo')
 
-        with self.assertRaises(UnsupportedError):
+        with self.assertRaises(Unsupported):
             slf_file.remove('/foo/bar.baz')
 
-        with self.assertRaises(UnsupportedError):
+        with self.assertRaises(Unsupported):
             slf_file.rename('/carrot', '/parrot')
+
+
+    def test_getinfo(self):
+        slf = SlfFS(create_test_slf_fs())
+        slf.isdir('/foo')
+        slf.isfile('/foo/bar.baz')
+
+    def test_walkFiles(self):
+        slf = SlfFS(create_test_slf_fs())
+        dirs = slf.walk.dirs('/')
+        self.assertEqual(list(dirs), ['/foo', '/spam', '/spam/ham'])
+
+        files = slf.walk.files('/')
+        self.assertEqual(list(slf.walk.files('/')), ['/carrot', '/foo/bar.baz', '/spam/parrot.txt', '/spam/ham/parrot.txt'])
+
+    def test_copydir(self):
+        slf_file = SlfFS(create_test_slf_fs())
+        mount_fs = MountFS()
+        mount_fs.mount('slf', slf_file)
+        self.assertTrue(mount_fs.isdir('slf'))
+
+        tempfs = TempFS()
+        mount_fs.mount('temp', tempfs)
+        mount_fs.copydir('slf', 'temp')
+        self.assertGreater(len(mount_fs.listdir('/temp')), 0)
+
+        tempfs.close()
+        mount_fs.close()
 
 
 class TestBufferedSlfFS(unittest.TestCase):
@@ -313,8 +357,9 @@ class TestBufferedSlfFS(unittest.TestCase):
         slf_file.makedir('/test')
         with slf_file.open('/test/a', 'wb') as f:
             f.write(b'WrittenInMemory')
-        slf_file.settimes('/test/a', modified_time=time)
+        slf_file.settimes('/test/a', modified=time)
 
         with BytesIO() as output:
             slf_file.save(output)
             self.assertEqual(output.getvalue(), expected_bytes)
+

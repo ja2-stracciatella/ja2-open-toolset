@@ -19,13 +19,16 @@
 
 import os
 import io
+import time
 from time import gmtime
 from calendar import timegm
 from datetime import datetime
 from fs.base import FS
-from fs.errors import CreateFailedError, UnsupportedError, ResourceNotFoundError, ResourceInvalidError
+from fs.errors import CreateFailed, FileExpected, Unsupported, ResourceNotFound, ResourceInvalid
 from fs.memoryfs import MemoryFS
 from fs.multifs import MultiFS
+from fs.info import Info
+
 
 from .common import decode_ja2_string, encode_ja2_string, Ja2FileHeader
 
@@ -98,7 +101,7 @@ class SlfHeader(Ja2FileHeader):
 
 
 def _get_normalized_filename(name_in_slf):
-    return '/' + '/'.join(name_in_slf.split('\\'))
+    return '/' + '/'.join(name_in_slf.strip('/').split('\\'))
 
 
 def _get_slf_filename(name_in_fs):
@@ -130,7 +133,7 @@ class SlfFS(FS):
                 self.file_name = slf_filename
                 self.file = open(slf_filename, 'rb')
             except FileNotFoundError as e:
-                raise CreateFailedError(
+                raise CreateFailed(
                     'Slf file not found ({0})'.format(slf_filename),
                     details=e
                 )
@@ -157,10 +160,17 @@ class SlfFS(FS):
                 self._path_fs.move(directory, directory + DIRECTORY_CONFLICT_SUFFIX)
 
             if self._path_fs.isdir('/'.join(path)):
-                self._path_fs.createfile('/'.join(path) + DIRECTORY_CONFLICT_SUFFIX)
+                self._path_fs.create('/'.join(path) + DIRECTORY_CONFLICT_SUFFIX)
             else:
-                self._path_fs.makedir(directory, recursive=True, allow_recreate=True)
-                self._path_fs.createfile('/'.join(path))
+                # Create directories recursively
+                parts = directory.strip('/').split('/')
+                current_path = ''
+                for part in parts:
+                    if part:
+                        current_path = current_path + '/' + part if current_path else '/' + part
+                        if not self._path_fs.exists(current_path):
+                            self._path_fs.makedir(current_path, recreate=True)
+                self._path_fs.create('/'.join(path))
 
     def _read_entry(self, index):
         entry_size = SlfEntry.get_size()
@@ -177,15 +187,15 @@ class SlfFS(FS):
         return self._path_fs.isdir(path)
 
     def listdir(self, path="/", wildcard=None, full=False, absolute=False, dirs_only=False, files_only=False):
-        return self._path_fs.listdir(path, wildcard, full, absolute, dirs_only, files_only)
+        return self._path_fs.listdir(path)
 
     def open(self, path, mode='r', buffering=-1, encoding='ascii', errors=None, newline=None, line_buffering=False, **kwargs):
         if mode != 'r' and mode != 'rb':
-            raise UnsupportedError(WRITING_NOT_SUPPORTED_ERROR.format('open'))
+            raise Unsupported(WRITING_NOT_SUPPORTED_ERROR.format('open'))
         if not self.exists(path):
-            raise ResourceNotFoundError(path)
+            raise ResourceNotFound(path)
         if self.isdir(path):
-            raise ResourceInvalidError(path)
+            raise FileExpected(path)
         slf_entry = self._get_slf_entry_for_path(path)
 
         self.file.seek(slf_entry['offset'], os.SEEK_SET)
@@ -193,35 +203,61 @@ class SlfFS(FS):
             return io.BytesIO(self.file.read(slf_entry['length']))
         return io.StringIO(self.file.read(slf_entry['length']).decode(encoding))
 
-    def getinfo(self, path):
+    def openbin(self, path, mode='r', buffering=-1, **kwargs):
+        """Open a file in binary mode."""
+        if mode != 'r' and mode != 'rb':
+            raise Unsupported(WRITING_NOT_SUPPORTED_ERROR.format('openbin'))
         if not self.exists(path):
-            raise ResourceNotFoundError(path)
+            raise ResourceNotFound(path)
         if self.isdir(path):
-            return {
-                'size': 0
-            }
+            raise ResourceInvalid(path)
         slf_entry = self._get_slf_entry_for_path(path)
-        return {
-            'size': slf_entry['length'],
-            'modified_time': slf_entry['time']
-        }
+
+        self.file.seek(slf_entry['offset'], os.SEEK_SET)
+        return io.BytesIO(self.file.read(slf_entry['length']))
+
+    def setinfo(self, path, info):
+        """Set file info - not supported for read-only filesystem."""
+        raise Unsupported(WRITING_NOT_SUPPORTED_ERROR.format('setinfo'))
+
+    def getinfo(self, path, namespaces=None):
+        if not self._path_fs.exists(path):
+            raise ResourceNotFound(path)
+        name = path.split('/')[-1] if path != '/' else ''
+        if name == '' or self.isdir(path):
+            return Info({'details': {'size': 0}, 'basic': {'name': name, 'is_dir': True}})
+        slf_entry = self._get_slf_entry_for_path(path)
+
+        if hasattr(slf_entry['time'], 'timetuple'):
+            timestamp = timegm(slf_entry['time'].timetuple())
+        else:
+            timestamp = timegm(slf_entry['time'])
+
+        return Info({
+            'details': {'size': slf_entry['length'], 'modified': timestamp },
+            'basic': {'name': name, 'is_dir': False}
+        })
 
     def makedir(self, path, recursive=False, allow_recreate=False):
-        raise UnsupportedError(WRITING_NOT_SUPPORTED_ERROR.format('makedir'))
+        raise Unsupported(WRITING_NOT_SUPPORTED_ERROR.format('makedir'))
 
     def remove(self, path):
-        raise UnsupportedError(WRITING_NOT_SUPPORTED_ERROR.format('remove'))
+        raise Unsupported(WRITING_NOT_SUPPORTED_ERROR.format('remove'))
 
     def removedir(self, path, recursive=False, force=False):
-        raise UnsupportedError(WRITING_NOT_SUPPORTED_ERROR.format('removedir'))
+        raise Unsupported(WRITING_NOT_SUPPORTED_ERROR.format('removedir'))
 
     def rename(self, src, dst):
-        raise UnsupportedError(WRITING_NOT_SUPPORTED_ERROR.format('rename'))
+        raise Unsupported(WRITING_NOT_SUPPORTED_ERROR.format('rename'))
 
     def _get_slf_entry_for_path(self, path):
         if path.endswith(DIRECTORY_CONFLICT_SUFFIX):
             path = path[:-len(DIRECTORY_CONFLICT_SUFFIX)]
-        return next(e for e in self.entries if _get_normalized_filename(e['file_name']) == path)
+        path = _get_normalized_filename(path)
+        for e in self.entries:
+            if _get_normalized_filename(e['file_name']) == path:
+                return e
+        raise ResourceNotFound(path)
 
 
 class BufferedSlfFS(MultiFS):
@@ -230,7 +266,7 @@ class BufferedSlfFS(MultiFS):
 
         if slf_filename is not None:
             self._file_fs = SlfFS(slf_filename)
-            self.addfs('file', self._file_fs)
+            self.add_fs('file', self._file_fs)
             self.library_name = self._file_fs.library_name
             self.library_path = self._file_fs.library_path
             self.version = self._file_fs.version
@@ -245,7 +281,7 @@ class BufferedSlfFS(MultiFS):
             self.contains_subdirectories = 1
 
         self._memory_fs = MemoryFS()
-        self.addfs('memory', self._memory_fs, write=True)
+        self.add_fs('memory', self._memory_fs, write=True)
 
     def remove(self, path):
         if self._file_fs.exists(path):
@@ -254,16 +290,23 @@ class BufferedSlfFS(MultiFS):
 
     def removedir(self, path, recursive=False, force=False):
         if self._file_fs.exists(path):
-            return self._file_fs._path_fs.removedir(path, recursive=recursive, force=force)
-        return super(BufferedSlfFS, self).removedir(path, recursive=recursive, force=force)
+            if recursive or force:
+                return self._file_fs._path_fs.removetree(path)
+            else:
+                return self._file_fs._path_fs.removedir(path)
+        return super(BufferedSlfFS, self).removedir(path)
 
     def save(self, to_file):
         header_size = SlfHeader.get_size()
-        names = list(self.walkfiles('/'))
-
+        names = list(self.walk.files('/'))
+       
         offset_start = header_size
-        sizes = list(self.getinfo(f)['size'] for f in names)
-        times = list(self.getinfo(f)['modified_time'] for f in names)
+        sizes = []
+        times = []
+        for f in names:
+            info = self.getinfo(f, namespaces=['details'])
+            sizes.append(info.size)
+            times.append(info.modified)
         times = list(t.timetuple() if isinstance(t, datetime) else t for t in times)
         offsets = list(sum(sizes[:i]) + offset_start for i in range(len(sizes)))
 

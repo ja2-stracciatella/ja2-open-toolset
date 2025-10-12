@@ -20,7 +20,7 @@
 import os
 import io
 import struct
-from collections import Iterable
+from collections.abc import Iterable
 from PIL import Image, ImageFile, ImagePalette
 
 from .common import Ja2FileHeader

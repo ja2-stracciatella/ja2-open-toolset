@@ -74,12 +74,12 @@ def main():
 
     if args.verbose:
         print("Extracting Files:")
-        slf_fs.printtree()
+        slf_fs.tree()
 
     combined_fs = MountFS()
-    combined_fs.mountdir('slf', slf_fs)
-    combined_fs.mountdir('out', out_fs)
-    combined_fs.copydir('/slf', '/out', overwrite=True)
+    combined_fs.mount('slf', slf_fs)
+    combined_fs.mount('out', out_fs)
+    combined_fs.copydir('/slf', '/out')
 
     if args.verbose:
         print("Done")

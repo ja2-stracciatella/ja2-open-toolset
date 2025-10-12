@@ -135,7 +135,7 @@ class SlfFS(FS):
             except FileNotFoundError as e:
                 raise CreateFailed(
                     'Slf file not found ({0})'.format(slf_filename),
-                    details=e
+                    exc=e
                 )
         else:
             self.file_name = 'file-like'
@@ -162,14 +162,7 @@ class SlfFS(FS):
             if self._path_fs.isdir('/'.join(path)):
                 self._path_fs.create('/'.join(path) + DIRECTORY_CONFLICT_SUFFIX)
             else:
-                # Create directories recursively
-                parts = directory.strip('/').split('/')
-                current_path = ''
-                for part in parts:
-                    if part:
-                        current_path = current_path + '/' + part if current_path else '/' + part
-                        if not self._path_fs.exists(current_path):
-                            self._path_fs.makedir(current_path, recreate=True)
+                self._path_fs.makedirs(directory, recreate=True)
                 self._path_fs.create('/'.join(path))
 
     def _read_entry(self, index):
@@ -186,22 +179,8 @@ class SlfFS(FS):
     def isdir(self, path):
         return self._path_fs.isdir(path)
 
-    def listdir(self, path="/", wildcard=None, full=False, absolute=False, dirs_only=False, files_only=False):
+    def listdir(self, path):
         return self._path_fs.listdir(path)
-
-    def open(self, path, mode='r', buffering=-1, encoding='ascii', errors=None, newline=None, line_buffering=False, **kwargs):
-        if mode != 'r' and mode != 'rb':
-            raise Unsupported(WRITING_NOT_SUPPORTED_ERROR.format('open'))
-        if not self.exists(path):
-            raise ResourceNotFound(path)
-        if self.isdir(path):
-            raise FileExpected(path)
-        slf_entry = self._get_slf_entry_for_path(path)
-
-        self.file.seek(slf_entry['offset'], os.SEEK_SET)
-        if mode == 'rb':
-            return io.BytesIO(self.file.read(slf_entry['length']))
-        return io.StringIO(self.file.read(slf_entry['length']).decode(encoding))
 
     def openbin(self, path, mode='r', buffering=-1, **kwargs):
         """Open a file in binary mode."""
@@ -249,6 +228,10 @@ class SlfFS(FS):
 
     def rename(self, src, dst):
         raise Unsupported(WRITING_NOT_SUPPORTED_ERROR.format('rename'))
+
+    def exists(self, path):
+        """Check if a path exists."""
+        return self._path_fs.exists(path)
 
     def _get_slf_entry_for_path(self, path):
         if path.endswith(DIRECTORY_CONFLICT_SUFFIX):

@@ -13,7 +13,7 @@ Alliance 2 game resources. Currently this is implemented only by a small Python 
 
 ## Installing
 
-Requirement: Python 3.2 or later
+Requirement: Python 3.9 or later
 
 - Download or clone this repository
 - Optional: Create and enable virtual environment so the dependencies arent installed globally
